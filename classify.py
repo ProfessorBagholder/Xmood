@@ -14,6 +14,25 @@ from typing import Any, Callable
 
 CASHTAG_RE = re.compile(r"(?<![A-Za-z0-9_])\$[A-Za-z]{1,6}(?:\.[A-Za-z]{1,4})?")
 LABELS = {"bull", "bear", "neutral", "spam"}
+SKIP_WHY = "Grok did not label this post"
+GROK_LABEL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "labels": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "i": {"type": "integer"},
+                    "label": {"type": "string", "enum": ["bull", "bear", "neutral", "spam"]},
+                    "why": {"type": "string"},
+                },
+                "required": ["i", "label", "why"],
+            },
+        }
+    },
+    "required": ["labels"],
+}
 
 SYSTEM = """You score social posts for a retail mood gauge on one stock.
 
@@ -70,21 +89,100 @@ def score_from_counts(bull: int, bear: int) -> tuple[int | None, str]:
     return score, label_for_score(score)
 
 
-def _parse_labels(raw: str, n: int) -> list[dict[str, str]]:
-    text = (raw or "").strip()
+def _unlabeled(n: int) -> list[dict[str, str]]:
+    return [{"label": "neutral", "why": SKIP_WHY} for _ in range(n)]
+
+
+def _strip_fences(text: str) -> str:
+    text = (text or "").strip()
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text)
-        text = re.sub(r"\s*```$", "", text)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError:
-        m = re.search(r"\{.*\}", text, re.S)
-        if not m:
-            raise ScoreError("Grok did not return JSON.")
-        data = json.loads(m.group(0))
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.I)
+        text = re.sub(r"\s*```.*$", "", text)
+    return text.strip()
+
+
+def _json_blobs(text: str) -> list[Any]:
+    """Pull JSON values out of grok stdout, including wrappers, fences, and logs."""
+    text = (text or "").strip()
+    if not text:
+        return []
+    found: list[Any] = []
+    stripped = _strip_fences(text)
+    for candidate in (text, stripped):
+        try:
+            found.append(json.loads(candidate))
+        except json.JSONDecodeError:
+            pass
+    for m in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", text, flags=re.I):
+        body = m.group(1).strip()
+        try:
+            found.append(json.loads(body))
+        except json.JSONDecodeError:
+            pass
+    decoder = json.JSONDecoder()
+    i = 0
+    src = stripped or text
+    while i < len(src):
+        while i < len(src) and src[i] not in "{[":
+            i += 1
+        if i >= len(src):
+            break
+        try:
+            obj, end = decoder.raw_decode(src[i:])
+        except json.JSONDecodeError:
+            i += 1
+            continue
+        found.append(obj)
+        i += max(end, 1)
+    return found
+
+
+def _has_labels(obj: Any) -> bool:
+    return isinstance(obj, dict) and isinstance(obj.get("labels"), list)
+
+
+def _unwrap_labels(data: Any, depth: int = 0) -> Any:
+    if depth > 8 or data is None:
+        return None
+    if isinstance(data, str):
+        for blob in _json_blobs(data):
+            hit = _unwrap_labels(blob, depth + 1)
+            if hit is not None:
+                return hit
+        return None
+    if _has_labels(data):
+        return data
+    if isinstance(data, dict):
+        for key in ("result", "text", "content"):
+            if key not in data:
+                continue
+            hit = _unwrap_labels(data[key], depth + 1)
+            if hit is not None:
+                return hit
+        for key, val in data.items():
+            if key in ("result", "text", "content"):
+                continue
+            if isinstance(val, (str, dict, list)):
+                hit = _unwrap_labels(val, depth + 1)
+                if hit is not None:
+                    return hit
+        return None
+    if isinstance(data, list):
+        if data and all(isinstance(x, dict) and ("label" in x or "i" in x) for x in data):
+            return {"labels": data}
+        for item in data:
+            hit = _unwrap_labels(item, depth + 1)
+            if hit is not None:
+                return hit
+        return None
+    return None
+
+
+def _parse_labels(raw: str, n: int) -> list[dict[str, str]]:
+    data = _unwrap_labels(raw)
     rows = data.get("labels") if isinstance(data, dict) else data
     if not isinstance(rows, list):
-        raise ScoreError("Grok JSON was missing labels.")
+        return _unlabeled(n)
     by_i: dict[int, dict[str, str]] = {}
     for row in rows:
         if not isinstance(row, dict):
@@ -101,7 +199,7 @@ def _parse_labels(raw: str, n: int) -> list[dict[str, str]]:
     out = []
     for i in range(n):
         hit = by_i.get(i)
-        out.append(hit if hit else {"label": "neutral", "why": "no label returned"})
+        out.append(hit if hit else {"label": "neutral", "why": SKIP_WHY})
     return out
 
 
@@ -137,6 +235,23 @@ def scoring_ready() -> bool:
     return grok_bin() is not None
 
 
+def _grok_cmd(binary: Path | str, prompt: str) -> list[str]:
+    return [
+        str(binary),
+        "-p",
+        prompt,
+        "--verbatim",
+        "--json-schema",
+        json.dumps(GROK_LABEL_SCHEMA, separators=(",", ":")),
+        "--output-format",
+        "json",
+        "--max-turns",
+        "1",
+        "--no-subagents",
+        "--disable-web-search",
+    ]
+
+
 def _chat_grok(messages: list[dict[str, str]]) -> str:
     binary = grok_bin()
     if binary is None:
@@ -149,15 +264,7 @@ def _chat_grok(messages: list[dict[str, str]]) -> str:
         parts.append(f"{m.get('role', 'user').upper()}:\n{m.get('content') or ''}")
     prompt = "\n\n".join(parts) + "\n\nReply with JSON only."
     r = subprocess.run(
-        [
-            str(binary),
-            "-p",
-            prompt,
-            "--output-format",
-            "plain",
-            "--no-subagents",
-            "--disable-web-search",
-        ],
+        _grok_cmd(binary, prompt),
         capture_output=True,
         text=True,
         timeout=180,
@@ -165,7 +272,10 @@ def _chat_grok(messages: list[dict[str, str]]) -> str:
     if r.returncode != 0:
         err = (r.stderr or r.stdout or "grok failed").strip()[:240]
         raise ScoreError("grok failed: " + err)
-    return r.stdout or ""
+    out = r.stdout or ""
+    if r.stderr:
+        out = out + "\n" + r.stderr
+    return out
 
 
 def _score_chunk(
@@ -243,6 +353,60 @@ def _selftest() -> int:
     )
     if parsed[0]["label"] != "bull" or parsed[1]["label"] != "bear":
         print("FAIL parse")
+        failed += 1
+
+    wrapped = [
+        json.dumps({"text": '{"labels":[{"i":0,"label":"bull","why":"from text"}]}'}),
+        json.dumps({"result": '{"labels":[{"i":0,"label":"bear","why":"from result"}]}'}),
+        json.dumps({"content": '{"labels":[{"i":0,"label":"spam","why":"from content"}]}'}),
+        json.dumps(
+            {
+                "text": '{"labels":[{"i":0,"label":"bull","why":"envelope"}]}',
+                "stopReason": "end_turn",
+                "sessionId": "abc",
+            }
+        ),
+        json.dumps({"content": [{"type": "text", "text": '{"labels":[{"i":0,"label":"bear","why":"parts"}]}'}]}),
+        "noise before\n```json\n{\"labels\":[{\"i\":0,\"label\":\"neutral\",\"why\":\"fenced\"}]}\n```\nafter",
+        "log line\n{\"labels\":[{\"i\":0,\"label\":\"bull\",\"why\":\"logs\"}]}\nmore log",
+    ]
+    want = ["bull", "bear", "spam", "bull", "bear", "neutral", "bull"]
+    for blob, lab in zip(wrapped, want):
+        got = _parse_labels(blob, 1)
+        if got[0]["label"] != lab:
+            print(f"FAIL unwrap want={lab} got={got[0]['label']}")
+            failed += 1
+
+    def one_bad(messages: list[dict[str, str]]) -> str:
+        blob = messages[-1]["content"]
+        if "[0]" in blob and "first post" in blob:
+            return "not json at all"
+        return json.dumps({"labels": [{"i": 0, "label": "bull", "why": "ok"}]})
+
+    mixed = classify_posts(
+        [
+            {"id": "a", "text": "first post about the name"},
+            {"id": "b", "text": "second post about the name"},
+        ],
+        symbol="ZZZ",
+        chat=one_bad,
+    )
+    if mixed[0]["classification"] != "neutral" or mixed[0]["reason"] != SKIP_WHY:
+        print("FAIL skip-unparsed got=" + mixed[0]["classification"] + "/" + mixed[0]["reason"])
+        failed += 1
+    if mixed[1]["classification"] != "bull":
+        print("FAIL keep-rest got=" + mixed[1]["classification"])
+        failed += 1
+
+    cmd = _grok_cmd("/tmp/grok", "prompt")
+    need = ["--verbatim", "--json-schema", "--output-format", "json", "--max-turns", "1", "--no-subagents", "--disable-web-search"]
+    if any(flag not in cmd for flag in need) or "plain" in cmd:
+        print("FAIL grok flags " + " ".join(cmd))
+        failed += 1
+    schema = json.loads(cmd[cmd.index("--json-schema") + 1])
+    enum = (((schema.get("properties") or {}).get("labels") or {}).get("items") or {}).get("properties", {}).get("label", {}).get("enum")
+    if enum != ["bull", "bear", "neutral", "spam"]:
+        print("FAIL json-schema enum")
         failed += 1
     s, lab = score_from_counts(8, 0)
     if s != 100 or lab != "Extreme bullish":
