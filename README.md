@@ -27,7 +27,7 @@ If the Grok binary is not named `grok` or is not on `PATH`, set `GROK_BIN` to it
 python3 server.py
 ```
 
-Open [http://127.0.0.1:8787](http://127.0.0.1:8787). Symbol is the default: type a ticker, pick a Yahoo listing, then Pull. Switch to Sector to pick a Yahoo industry (no free text) and Pull that.
+Open [http://127.0.0.1:8787](http://127.0.0.1:8787). Symbol is the default: type a ticker, pick a Yahoo listing, then Pull. Switch to Sector to pick a Yahoo industry, or type a theme Yahoo does not list and Pull that.
 
 After a ticker result, the muted industry line under the gauge runs a sector pull for that Yahoo industry.
 

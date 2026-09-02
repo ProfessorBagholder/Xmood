@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
 from classify import SKIP_WHY, ScoreError, classify_posts, score_from_counts, scoring_ready, scorer_info, write_thesis  # noqa: E402
-from queries import canonical_industry, load_taxonomy, parent_sector, sector_query, symbol_query  # noqa: E402
+from queries import canonical_industry, load_taxonomy, parent_sector, resolve_sector_subject, sector_query, symbol_query  # noqa: E402
 
 STATIC = ROOT / "static"
 RESULTS = ROOT / "results"
@@ -379,6 +379,7 @@ def _payload(
     kind: str = "stock",
     industry: str = "",
     sector: str = "",
+    theme: bool = False,
 ) -> dict[str, Any]:
     posts: list[dict[str, Any]] = []
     dropped_wrong = 0
@@ -515,6 +516,7 @@ def _payload(
         "company": company,
         "industry": profile_industry,
         "sector": profile_sector,
+        "theme": bool(theme) if kind == "sector" else False,
         "as_of": as_of,
         "window": "last 7 days",
         "query": query,
@@ -622,10 +624,9 @@ def _ready_to_search() -> tuple[str, None] | tuple[None, str]:
 def api_pull(body: PullIn):
     mode = (body.mode or "symbol").strip().lower()
     if mode == "sector":
-        industry = (body.industry or "").strip()
+        industry, sector, is_theme = resolve_sector_subject(body.industry or "")
         if not industry:
-            raise HTTPException(status_code=400, detail="Pick an industry from the list.")
-        sector = (body.sector or "").strip() or parent_sector(industry)
+            raise HTTPException(status_code=400, detail="Type a theme or pick an industry.")
         token, err = _ready_to_search()
         if err:
             raise HTTPException(status_code=400, detail=err)
@@ -643,6 +644,7 @@ def api_pull(body: PullIn):
                 kind="sector",
                 industry=industry,
                 sector=sector,
+                theme=is_theme,
             )
             q.put(("done", result))
 

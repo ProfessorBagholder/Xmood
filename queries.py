@@ -63,6 +63,25 @@ def canonical_industry(industry: str, taxonomy: list[dict[str, object]] | None =
     return ""
 
 
+def resolve_sector_subject(
+    industry: str,
+    taxonomy: list[dict[str, object]] | None = None,
+) -> tuple[str, str, bool]:
+    """Picker spelling and real Yahoo parent, or a free theme with no parent.
+
+    is_theme is True when the string is not a Yahoo industry. Themes never get
+    a fabricated parent sector.
+    """
+    raw = (industry or "").strip()
+    if not raw:
+        return "", "", False
+    tax = taxonomy if taxonomy is not None else load_taxonomy()
+    canon = canonical_industry(raw, tax)
+    if canon:
+        return canon, parent_sector(canon, tax), False
+    return raw, "", True
+
+
 def x_stem(symbol: str) -> str:
     tag = (symbol or "").strip().lstrip("$")
     return tag.split(".", 1)[0] if tag else ""
@@ -143,6 +162,24 @@ def _selftest() -> int:
     check("Bogus Sector" not in names, "taxonomy grew a made-up industry")
     check(canonical_industry("Software—Infrastructure", tax) == "Software - Infrastructure", "em dash must map to picker spelling")
     check(canonical_industry("not a yahoo industry", tax) == "", "unknown industry must stay empty")
+    check(canonical_industry("quantum", tax) == "", "canonical_industry(quantum) must be empty")
+    check("Quantum" not in names and "quantum" not in {n.casefold() for n in names}, "taxonomy must not grow a Quantum industry")
+
+    qtm = sector_query("quantum")
+    check('"quantum"' in qtm, "sector_query(quantum) must contain quoted quantum got=" + qtm)
+    check(qtm == '"quantum" -is:retweet', "sector_query(quantum) want=\"quantum\" -is:retweet got=" + qtm)
+    check("Technology" not in qtm and "Industrials" not in qtm, "theme query must not add a parent sector got=" + qtm)
+
+    theme_name, theme_parent, is_theme = resolve_sector_subject("quantum", tax)
+    check(is_theme is True, "quantum must resolve as a theme")
+    check(theme_name == "quantum", "theme keeps the typed phrase got=" + theme_name)
+    check(theme_parent == "", "theme must not invent a parent sector got=" + theme_parent)
+    check(resolve_sector_subject("", tax) == ("", "", False), "empty industry must stay empty")
+
+    wm_name, wm_parent, wm_theme = resolve_sector_subject("waste management", tax)
+    check(wm_theme is False, "Waste Management must stay a Yahoo industry")
+    check(wm_name == "Waste Management", "Waste Management must use picker spelling got=" + wm_name)
+    check(wm_parent == "Industrials", "Waste Management parent want=Industrials got=" + wm_parent)
 
     if failed:
         print(f"selftest FAIL ({failed})")

@@ -108,6 +108,20 @@
       cursor: pointer;
     }
     .sec-ind:hover { background: #21262d; }
+    .sec-theme {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      color: var(--muted);
+      border: 0;
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .sec-theme[hidden] { display: none; }
+    .sec-theme:hover { color: var(--blue); }
     .context {
       color: var(--muted);
       font-size: 13px;
@@ -198,6 +212,7 @@
         <div id="sectorMenu">
           <input type="search" id="sectorFilter" placeholder="Filter" autocomplete="off" />
           <div id="sectorList"></div>
+          <button type="button" id="sectorThemeHint" class="sec-theme" hidden></button>
         </div>
       </div>
       <button type="button" id="go">Pull</button>
@@ -340,6 +355,7 @@
         industry: "",
         sector: "",
         company: "",
+        theme: false,
         posts: [],
         history: []
       };
@@ -347,6 +363,10 @@
 
     function originalText(p) {
       return p.text_original || p.text || "";
+    }
+
+    function quotePhrase(s) {
+      return "\u201c" + s + "\u201d";
     }
 
     function setContext(payload, ready) {
@@ -386,11 +406,16 @@
     function render(payload, notice) {
       const ready = Boolean(payload.as_of) || (payload.posts || []).length || Number(payload.n_fetched || 0);
       const isSector = (payload.mode || "") === "sector";
-      document.getElementById("sub").textContent = ready
-        ? (isSector
-          ? (payload.industry || payload.company || "")
-          : [payload.company, payload.display_ticker || payload.ticker].filter(Boolean).join(" · "))
-        : "";
+      let title = "";
+      if (ready) {
+        if (isSector) {
+          const name = payload.industry || payload.company || "";
+          title = payload.theme ? quotePhrase(name) : name;
+        } else {
+          title = [payload.company, payload.display_ticker || payload.ticker].filter(Boolean).join(" · ");
+        }
+      }
+      document.getElementById("sub").textContent = title;
       setNeedle(ready ? payload.score : null);
       setContext(payload, ready);
       const sn = document.getElementById("scoreNum");
@@ -538,12 +563,74 @@
       document.getElementById("sectorMenu").classList.remove("open");
     }
 
-    function openSectorMenu() {
-      document.getElementById("sectorMenu").classList.add("open");
+    function openSectorMenu(opts) {
+      const menu = document.getElementById("sectorMenu");
+      const already = menu.classList.contains("open");
+      const keep = Boolean(opts && opts.keepFilter) || already;
+      menu.classList.add("open");
       const f = document.getElementById("sectorFilter");
-      f.value = "";
-      drawSectorList("");
+      if (!keep) {
+        f.value = "";
+        drawSectorList("");
+      } else {
+        drawSectorList(f.value);
+      }
       f.focus();
+    }
+
+    function typedFilter() {
+      return (document.getElementById("sectorFilter").value || "").trim();
+    }
+
+    function normName(s) {
+      let text = (s || "").trim().toLowerCase();
+      text = text.replace(/\u2014/g, "-").replace(/\u2013/g, "-");
+      text = text.replace(/\s*-\s*/g, "-");
+      text = text.replace(/\s+/g, " ");
+      return text;
+    }
+
+    function industryMatchesFilter(name, sector, q) {
+      if (!q) return true;
+      return String(name).toLowerCase().includes(q) || String(sector).toLowerCase().includes(q);
+    }
+
+    function sectorFilterHasMatches(filter) {
+      const q = (filter || "").trim().toLowerCase();
+      if (!q) return true;
+      for (const row of SECTORS || []) {
+        const sector = row.sector || "";
+        for (const n of row.industries || []) {
+          if (industryMatchesFilter(n, sector, q)) return true;
+        }
+      }
+      return false;
+    }
+
+    function matchTypedIndustry(typed) {
+      const want = normName(typed);
+      if (!want) return null;
+      for (const row of SECTORS || []) {
+        for (const n of row.industries || []) {
+          if (normName(n) === want) {
+            return { industry: n, sector: row.sector || "" };
+          }
+        }
+      }
+      return null;
+    }
+
+    function updateThemeHint() {
+      const hint = document.getElementById("sectorThemeHint");
+      const typed = typedFilter();
+      const show = Boolean(typed) && !sectorFilterHasMatches(typed);
+      if (!show) {
+        hint.hidden = true;
+        hint.textContent = "";
+        return;
+      }
+      hint.hidden = false;
+      hint.textContent = "Pull " + quotePhrase(typed) + " as a theme";
     }
 
     function drawSectorList(filter) {
@@ -552,10 +639,7 @@
       const q = (filter || "").trim().toLowerCase();
       (SECTORS || []).forEach(row => {
         const sector = row.sector || "";
-        const inds = (row.industries || []).filter(n => {
-          if (!q) return true;
-          return String(n).toLowerCase().includes(q) || sector.toLowerCase().includes(q);
-        });
+        const inds = (row.industries || []).filter(n => industryMatchesFilter(n, sector, q));
         if (!inds.length) return;
         const hd = document.createElement("div");
         hd.className = "sec-hd";
@@ -570,6 +654,7 @@
           box.appendChild(b);
         });
       });
+      updateThemeHint();
     }
 
     function pickIndustry(industry, sector) {
@@ -660,7 +745,6 @@
       if (!industry) {
         setMode("sector");
         openSectorMenu();
-        setStatus("Pick an industry from the list.", false);
         return;
       }
       setMode("sector", { focus: false });
@@ -689,6 +773,14 @@
       }
     }
 
+    function pullThemeOrIndustry(typed) {
+      typed = (typed || "").trim();
+      if (!typed) return pullSector("");
+      const hit = matchTypedIndustry(typed);
+      if (hit) return pullSector(hit.industry, hit.sector);
+      return pullSector(typed, "");
+    }
+
     async function lookupTyped(typed) {
       if (MODE !== "symbol") return;
       typed = (typed || "").trim();
@@ -708,12 +800,16 @@
     async function pull() {
       if (PULLING) return;
       if (MODE === "sector") {
-        if (!sectorPick || !sectorPick.industry) {
-          openSectorMenu();
-          setStatus("Pick an industry from the list.", false);
+        if (sectorPick && sectorPick.industry) {
+          await pullSector(sectorPick.industry, sectorPick.sector);
           return;
         }
-        await pullSector(sectorPick.industry, sectorPick.sector);
+        const typed = typedFilter();
+        if (typed && !sectorFilterHasMatches(typed)) {
+          await pullThemeOrIndustry(typed);
+          return;
+        }
+        openSectorMenu({ keepFilter: Boolean(typed) });
         return;
       }
       const typed = (document.getElementById("ticker").value || "").trim().toUpperCase();
@@ -773,15 +869,25 @@
       }
     });
     document.getElementById("sectorFilter").addEventListener("input", e => {
+      sectorPick = null;
       drawSectorList(e.target.value);
     });
     document.getElementById("sectorFilter").addEventListener("keydown", e => {
-      if (e.key === "Escape") {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        pull();
+      } else if (e.key === "Escape") {
         closeSectorMenu();
         document.getElementById("sectorBox").focus();
       }
     });
+    document.getElementById("sectorThemeHint").addEventListener("click", () => {
+      const typed = typedFilter();
+      if (!typed) return;
+      pullThemeOrIndustry(typed);
+    });
     document.addEventListener("click", e => {
+      if (e.target.closest && e.target.closest("#go")) return;
       const slot = document.getElementById("sectorSlot");
       if (slot && !slot.contains(e.target)) closeSectorMenu();
     });
