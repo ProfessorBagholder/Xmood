@@ -193,8 +193,8 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
     dropped_wrong = len(raw) - len(hits)
     n_hits = len(hits)
     for i, tw in enumerate(hits, 1):
-        if note:
-            note(f"Reading {i}/{n_hits}")
+        if note and i == 1:
+            note("Searching X…")
         text = tw.get("text") or ""
         lang = tw.get("lang")
         text_en, translated = _translate(text, lang)
@@ -335,7 +335,7 @@ def api_pull(body: PullIn):
 
     def work() -> None:
         try:
-            note("Searching X")
+            note("Searching X…")
             raw = _search_x(query, token)
             result = _payload(symbol, name, query, raw, note=note)
             q.put(("done", result))
