@@ -64,9 +64,13 @@ THESIS_SYSTEM = """You write a short two-sided case for one listed name.
 
 Return only JSON: {"summary":"...","bull":"...","bear":"..."}
 
-summary: one short ordinary-English mood line about this name.
-bull: the well thought-out case for the name doing well.
-bear: the well thought-out case for the name doing poorly.
+summary: one short ordinary-English mood line that states the mood score.
+bull: the well thought-out case for the name doing well. Use the given news and operating points.
+bear: the well thought-out case for the name doing poorly. Use the given news and operating points.
+
+If the facts mention a shipment, delivery, offtake, sold-out output, or customers taking product, the company is already operating. Do not call it unproven, a hopeful, a project company with only plans, or a slide-deck name.
+
+If facts are empty: say the case is limited because no company news was fetched. Do not write a generic sector story.
 
 Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes. No trader slang. No print. No book. No extra keys."""
 
@@ -424,12 +428,28 @@ def write_thesis(
     symbol: str,
     name: str = "",
     chat: Callable[[list[dict[str, str]]], str] | None = None,
+    score: int | None = None,
+    label: str = "",
+    bull: int = 0,
+    bear: int = 0,
+    neutral: int = 0,
+    facts: list[str] | None = None,
 ) -> dict[str, str]:
     stock = f"{symbol} ({name})" if name else symbol
+    score_s = "none" if score is None else str(score)
+    fact_items = [str(x).strip() for x in (facts or []) if str(x).strip()]
+    if fact_items:
+        fact_block = "\n".join(f"- {x}" for x in fact_items)
+    else:
+        fact_block = "(none)"
     user = (
         f"Listed name: {stock}\n"
-        "Write a short mood line plus a well thought-out two-sided case for this name.\n"
-        "Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes."
+        f"Mood score: {score_s}\n"
+        f"Mood label: {label or 'unknown'}\n"
+        f"Counts: bull={bull} bear={bear} neutral={neutral}\n"
+        f"Company news and operating points:\n{fact_block}\n"
+        "Write a short mood line that states the mood score, plus a well thought-out two-sided case.\n"
+        "Use the given news and operating points. Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes."
     )
     messages = [{"role": "system", "content": THESIS_SYSTEM}, {"role": "user", "content": user}]
     try:

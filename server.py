@@ -22,7 +22,7 @@ from pydantic import BaseModel
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
-from classify import ScoreError, classify_posts, score_from_counts, scoring_ready, scorer_info, write_thesis  # noqa: E402
+from classify import SKIP_WHY, ScoreError, classify_posts, score_from_counts, scoring_ready, scorer_info, write_thesis  # noqa: E402
 
 STATIC = ROOT / "static"
 RESULTS = ROOT / "results"
@@ -91,6 +91,40 @@ def _yahoo_lookup(q: str) -> list[dict[str, str]]:
                 "type": str(row.get("quoteType") or "").strip(),
             }
         )
+    return out
+
+
+def _yahoo_news(q: str) -> list[str]:
+    import httpx
+
+    q = (q or "").strip()
+    if not q:
+        return []
+    headers = {"User-Agent": "Mozilla/5.0"}
+    with httpx.Client(timeout=20.0, headers=headers) as client:
+        r = client.get(
+            "https://query1.finance.yahoo.com/v1/finance/search",
+            params={"q": q, "quotesCount": 4, "newsCount": 12},
+        )
+    if r.status_code >= 400:
+        return []
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in (r.json() or {}).get("news") or []:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title") or "").strip()
+        if not title:
+            continue
+        key = title.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        publisher = str(row.get("publisher") or "").strip()
+        headline = f"{title} ({publisher})" if publisher else title
+        out.append(headline)
+        if len(out) >= 10:
+            break
     return out
 
 
@@ -235,10 +269,44 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
     score, label = score_from_counts(bull, bear)
     if not classified:
         label = "No posts matched that exact tag"
+    facts: list[str] = []
+    seen_facts: set[str] = set()
+
+    def _add_fact(item: str) -> None:
+        t = (item or "").strip()
+        if not t:
+            return
+        key = t.casefold()
+        if key in seen_facts:
+            return
+        seen_facts.add(key)
+        facts.append(t)
+
+    for headline in _yahoo_news(symbol) + (_yahoo_news(name) if name else []):
+        if len(facts) >= 16:
+            break
+        _add_fact(headline)
+    for p in kept:
+        if len(facts) >= 16:
+            break
+        why = str(p.get("reason") or "").strip()
+        if not why or why == SKIP_WHY:
+            continue
+        _add_fact(why)
+    facts = facts[:16]
     if note:
         note("Writing thesis…")
     try:
-        thesis = write_thesis(symbol, name)
+        thesis = write_thesis(
+            symbol,
+            name,
+            score=score,
+            label=label,
+            bull=bull,
+            bear=bear,
+            neutral=neut,
+            facts=facts,
+        )
     except Exception:
         thesis = {"summary": "", "bull": "", "bear": ""}
     as_of = _now()
