@@ -432,6 +432,11 @@
         setStatus(j.detail || "Pick the listing.", false);
         return;
       }
+      if (j.status === "none") {
+        showPicks([]);
+        setStatus(j.detail || "None found.", false);
+        return;
+      }
       LIVE = j;
       setStatus("", false);
       render(j, "");
@@ -464,7 +469,7 @@
       }
       const pb = document.getElementById("picks"); if (pb) pb.innerHTML = "";
       setPulling(true);
-      setStatus("Searching X…", false);
+      setStatus("Looking up listings…", false);
       try {
         const r = await fetch("/api/pull", {
           method: "POST",

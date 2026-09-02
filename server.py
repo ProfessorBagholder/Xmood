@@ -182,15 +182,11 @@ def _yahoo_lookup(q: str) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     seen: set[str] = set()
     with httpx.Client(timeout=20.0, headers=headers) as client:
-        lookup_qs = [q]
-        if "." not in q:
-            lookup_qs.append(q + ".")
-            lookup_qs.extend(q + "." + ch for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
         rows = list(_yahoo_quotes(client, q))
         from concurrent.futures import ThreadPoolExecutor
 
-        with ThreadPoolExecutor(max_workers=8) as pool:
-            for extra in pool.map(lambda qq: _yahoo_lookup_docs(client, qq), lookup_qs):
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            for extra in pool.map(lambda qq: _yahoo_lookup_docs(client, qq), (q, q + ".")):
                 rows.extend(extra)
         for row in rows:
             key = row["symbol"].upper()
@@ -483,6 +479,23 @@ def api_pull(body: PullIn):
     ticker = (body.ticker or "").strip().upper()
     if not TICKER_RE.match(ticker):
         raise HTTPException(status_code=400, detail="Ticker must be letters, digits, or dots.")
+    if not (body.confirmed and (body.symbol or ticker)):
+        matches = _yahoo_lookup(ticker)
+        if not matches:
+            return JSONResponse(
+                {
+                    "status": "none",
+                    "detail": "None found.",
+                    "matches": [],
+                }
+            )
+        return JSONResponse(
+            {
+                "status": "pick",
+                "detail": "Pick a listing, then Pull runs that exact tag.",
+                "matches": matches,
+            }
+        )
     token = _token()
     if not token:
         raise HTTPException(
@@ -495,31 +508,14 @@ def api_pull(body: PullIn):
             detail="Scoring uses the grok command on this computer. It was not found on PATH. Set GROK_BIN in .env if needed.",
         )
     matches = _yahoo_lookup(ticker)
-    exact = [m for m in matches if m["symbol"].upper() == ticker.upper()]
-    chosen = None
-    if body.confirmed and (body.symbol or ticker):
-        chosen = {
-            "symbol": (body.symbol or ticker).strip(),
-            "name": (body.name or "").strip(),
-        }
-        if not chosen["name"]:
-            hit = [m for m in matches if m["symbol"].upper() == chosen["symbol"].upper()]
-            if hit:
-                chosen["name"] = hit[0]["name"]
-    elif "." in ticker and exact:
-        chosen = exact[0]
-    elif len(matches) == 1:
-        chosen = matches[0]
-    elif len(matches) > 1:
-        return JSONResponse(
-            {
-                "status": "pick",
-                "detail": "Several listings match. Pick one, then Pull runs that exact tag.",
-                "matches": matches,
-            }
-        )
-    else:
-        chosen = {"symbol": ticker, "name": ""}
+    chosen = {
+        "symbol": (body.symbol or ticker).strip(),
+        "name": (body.name or "").strip(),
+    }
+    if not chosen["name"]:
+        hit = [m for m in matches if m["symbol"].upper() == chosen["symbol"].upper()]
+        if hit:
+            chosen["name"] = hit[0]["name"]
 
     symbol = chosen["symbol"]
     name = chosen.get("name") or ""
