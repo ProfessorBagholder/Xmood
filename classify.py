@@ -249,6 +249,8 @@ def _grok_cmd(binary: Path | str, prompt: str) -> list[str]:
         "1",
         "--no-subagents",
         "--disable-web-search",
+        "--reasoning-effort",
+        "none",
     ]
 
 
@@ -419,7 +421,7 @@ def _selftest() -> int:
         failed += 1
 
     cmd = _grok_cmd("/tmp/grok", "prompt")
-    need = ["--verbatim", "--json-schema", "--output-format", "json", "--max-turns", "1", "--no-subagents", "--disable-web-search"]
+    need = ["--verbatim", "--json-schema", "--output-format", "json", "--max-turns", "1", "--no-subagents", "--disable-web-search", "--reasoning-effort", "none"]
     if any(flag not in cmd for flag in need) or "plain" in cmd:
         print("FAIL grok flags " + " ".join(cmd))
         failed += 1

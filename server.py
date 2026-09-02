@@ -157,7 +157,7 @@ def _search_x(query: str, token: str) -> list[dict[str, Any]]:
 
     params = {
         "query": query,
-        "max_results": 20,
+        "max_results": 100,
         "tweet.fields": "id,text,created_at,lang,author_id",
         "expansions": "author_id",
         "user.fields": "username,name",
