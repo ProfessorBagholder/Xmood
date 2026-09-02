@@ -103,7 +103,7 @@ summary: one short ordinary-English mood line that states the mood score.
 bull: the well thought-out case for the industry doing well. Use the given news and operating points.
 bear: the well thought-out case for the industry doing poorly. Use the given news and operating points.
 
-The title is an industry, not one listed company, even when a company shares the same name. Do not write that one company's CEO, dividend, or share move as if they were the industry.
+Write about the industry as a whole: demand, costs, regulation, and operators in that line of work. Never treat the industry title as a listed company.
 
 If facts are empty: say the case is limited because no industry news was fetched.
 

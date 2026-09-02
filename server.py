@@ -453,9 +453,9 @@ def _payload(
         facts.append(t)
 
     if kind == "sector":
-        news_q = [industry] + ([sector] if sector else [])
-        if _industry_is_also_a_listing(industry):
-            news_q = []
+        news_q = [industry + " industry"]
+        if sector and sector.casefold() not in industry.casefold():
+            news_q.append(sector + " sector")
     else:
         news_q = [symbol] + ([name] if name else [])
     for qn in news_q:
