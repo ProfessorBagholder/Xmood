@@ -53,8 +53,10 @@ Read the whole post. Grade what the writer is doing with this stock in front of 
 
 bull: the writer is talking this stock up. That includes saying they are buying, expecting a rise, cheering, or posting strong results, shipments, or other good operating news as the point of the post.
 bear: the writer is talking this stock down. That includes selling, expecting a fall, or posting a miss, a warning, or other bad news as the point of the post.
-neutral: a genuine question, or a true even split, or nothing about whether things are going well or badly.
+neutral: they are actually asking for information with no lean, or a true even split, or nothing about whether things are going well or badly. A question that teases someone for not holding, or implies they should already own it, is bull, not a genuine question.
 spam: ads or a pile of unrelated tickers.
+
+Score the writer's meaning in any language. Do not treat a question mark as no view by itself.
 
 If the post is a list of results, grade the results. Income up, a beat, a first shipment, or a unit delivered as the headline is bull. A miss, a cut, or a decline as the headline is bear. Naming which part of the business grew does not make it neutral.
 
