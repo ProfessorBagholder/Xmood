@@ -95,7 +95,7 @@ def _yahoo_lookup(q: str) -> list[dict[str, str]]:
 
 
 def _query(symbol: str, name: str) -> str:
-    # $CAT is the X cashtag. A dotted tag like $CH.V has to be quoted so it is not $CH.
+    # Letter-only tags use the X cashtag. A dotted tag is quoted so $CH.V is not read as $CH.
     tag = symbol.strip()
     if re.fullmatch(r"[A-Za-z0-9]+", tag):
         cashtag = "$" + tag
