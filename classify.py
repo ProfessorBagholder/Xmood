@@ -105,10 +105,11 @@ def label_for_score(score: int | None) -> str:
     return "Extreme bullish"
 
 
-def score_from_counts(bull: int, bear: int) -> tuple[int | None, str]:
-    if bull + bear < 1:
-        return None, "Not enough directional posts"
-    score = round(100 * bull / (bull + bear))
+def score_from_counts(bull: int, bear: int, neutral: int = 0) -> tuple[int | None, str]:
+    n = bull + bear + neutral
+    if n < 1:
+        return None, label_for_score(None)
+    score = round(50 + 50 * (bull - bear) / n)
     return score, label_for_score(score)
 
 
@@ -549,6 +550,10 @@ def _selftest() -> int:
     s, lab = score_from_counts(8, 0)
     if s != 100 or lab != "Extreme bullish":
         print("FAIL score 100")
+        failed += 1
+    s, lab = score_from_counts(1, 0, 1)
+    if s == 100:
+        print("FAIL score 1,0,1 is 100")
         failed += 1
 
     parsed_th = _parse_thesis('{"summary":"Mixed mood.","bull":"Sales can grow.","bear":"Costs may stay high."}')

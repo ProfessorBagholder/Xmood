@@ -372,7 +372,7 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
     bull = sum(1 for p in kept if p.get("classification") == "bull")
     bear = sum(1 for p in kept if p.get("classification") == "bear")
     neut = sum(1 for p in kept if p.get("classification") == "neutral")
-    score, label = score_from_counts(bull, bear)
+    score, label = score_from_counts(bull, bear, neut)
     if not classified:
         label = "No posts matched that exact tag"
     facts: list[str] = []
