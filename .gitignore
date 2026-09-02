@@ -1,0 +1,8 @@
+
+# Never commit a filled .env
+*.pyc
+.env
+.venv/
+__pycache__/
+models/
+results/
