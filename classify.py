@@ -95,15 +95,19 @@ If facts are empty: say the case is limited because no company news was fetched.
 
 Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes. No trader slang. No print. No book. No extra keys."""
 
-THESIS_SYSTEM_SECTOR = """You write a short two-sided case for one industry.
+THESIS_SYSTEM_SECTOR = """You write a short two-sided case for one industry, not for one listed company.
 
 Return only JSON: {"summary":"...","bull":"...","bear":"..."}
 
-summary: one short ordinary-English mood line that states the mood score.
-bull: the well thought-out case for the industry doing well. Use the given news and operating points.
-bear: the well thought-out case for the industry doing poorly. Use the given news and operating points.
+The title is an industry. It is not a ticker and not one company, even if a company uses the same words.
 
-If facts are empty: say the case is limited because no industry news was fetched.
+summary: one short ordinary-English mood line that states the mood score for the industry.
+bull: the case for the industry doing well. Speak about demand, costs, regulation, and several operators. Do not write a CEO change, a dividend, or one stock's slide as if they were the industry.
+bear: the case for the industry doing poorly, same rule.
+
+If a fact names one company, treat it as one name in the industry, not as the whole industry.
+
+If facts are empty: say the case is limited because no industry-wide points were fetched.
 
 Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes. No trader slang. No print. No book. No extra keys."""
 
@@ -495,7 +499,8 @@ def write_thesis(
             f"Mood label: {label or 'unknown'}\n"
             f"Counts: bull={bull} bear={bear} neutral={neutral}\n"
             f"Industry news and operating points:\n{fact_block}\n"
-            "Write a short mood line that states the mood score, plus a well thought-out two-sided case.\n"
+            "Write a short mood line that states the mood score, plus a well thought-out two-sided case for the industry.\n"
+            "Do not treat the industry name as one company. Do not write a CEO, dividend, or one-stock case.\n"
             "Use the given news and operating points. Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes."
         )
         system = THESIS_SYSTEM_SECTOR

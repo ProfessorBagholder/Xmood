@@ -453,7 +453,7 @@ def _payload(
         facts.append(t)
 
     if kind == "sector":
-        news_q = [industry] + ([sector] if sector else [])
+        news_q = []
     else:
         news_q = [symbol] + ([name] if name else [])
     for qn in news_q:
