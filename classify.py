@@ -51,7 +51,7 @@ label must be one of: bull, bear, neutral, spam.
 
 Read the whole post. Grade what the writer is doing with this stock in front of other readers, including jokes, sarcasm, and quoting other people.
 
-bull: the writer is talking this stock up. That includes saying they are buying, expecting a rise, cheering, or posting strong results, shipments, or other good operating news as the point of the post.
+bull: the writer is talking this stock up. That includes saying they are buying, expecting a rise, cheering, or posting strong results, shipments, or other good operating news as the point of the post. A hold-nudge question (holding, adding, buying more, or whether it is too late) is bull.
 bear: the writer is talking this stock down. That includes selling, expecting a fall, or posting a miss, a warning, or other bad news as the point of the post.
 neutral: they are actually asking for information with no lean, or a true even split, or nothing about whether things are going well or badly. A question that teases someone for not holding, or implies they should already own it, is bull, not a genuine question.
 spam: ads or a pile of unrelated tickers.
@@ -59,6 +59,25 @@ spam: ads or a pile of unrelated tickers.
 Score the writer's meaning in any language. Do not treat a question mark as no view by itself.
 
 If the post is a list of results, grade the results. Income up, a beat, a first shipment, or a unit delivered as the headline is bull. A miss, a cut, or a decline as the headline is bear. Naming which part of the business grew does not make it neutral.
+
+why: one short ordinary-English clause. No extra keys."""
+
+SYSTEM_SECTOR = """You score social posts for a retail mood gauge on one industry.
+
+Return only JSON: {"labels":[{"i":0,"label":"bull","why":"short reason"}]}
+
+label must be one of: bull, bear, neutral, spam.
+
+Read the whole post. Grade what the writer is doing with this industry in front of other readers, including jokes, sarcasm, and quoting other people.
+
+bull: the writer is talking this industry up. That includes saying they are buying names in it, expecting a rise, cheering, or posting strong results or other good operating news as the point of the post. A hold-nudge question (holding, adding, buying more, or whether it is too late) is bull.
+bear: the writer is talking this industry down. That includes selling, expecting a fall, or posting a miss, a warning, or other bad news as the point of the post.
+neutral: they are actually asking for information with no lean, or a true even split, or nothing about whether things are going well or badly. A question that teases someone for not holding, or implies they should already own it, is bull, not a genuine question.
+spam: ads or a pile of unrelated tickers.
+
+Score the writer's meaning in any language. Do not treat a question mark as no view by itself.
+
+If the post is a list of results, grade the results. Income up, a beat, a first shipment, or a unit delivered as the headline is bull. A miss, a cut, or a decline as the headline is bear.
 
 why: one short ordinary-English clause. No extra keys."""
 
@@ -73,6 +92,18 @@ bear: the well thought-out case for the name doing poorly. Use the given news an
 If the facts mention a shipment, delivery, offtake, sold-out output, or customers taking product, the company is already operating. Do not call it unproven, a hopeful, a project company with only plans, or a slide-deck name.
 
 If facts are empty: say the case is limited because no company news was fetched. Do not write a generic sector story.
+
+Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes. No trader slang. No print. No book. No extra keys."""
+
+THESIS_SYSTEM_SECTOR = """You write a short two-sided case for one industry.
+
+Return only JSON: {"summary":"...","bull":"...","bear":"..."}
+
+summary: one short ordinary-English mood line that states the mood score.
+bull: the well thought-out case for the industry doing well. Use the given news and operating points.
+bear: the well thought-out case for the industry doing poorly. Use the given news and operating points.
+
+If facts are empty: say the case is limited because no industry news was fetched.
 
 Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes. No trader slang. No print. No book. No extra keys."""
 
@@ -315,11 +346,21 @@ def _score_chunk(
     symbol: str,
     name: str,
     chat: Callable[[list[dict[str, str]]], str],
+    kind: str = "stock",
 ) -> list[dict[str, str]]:
     lines = [f'[{it["i"]}] {it["text"]}' for it in items]
-    stock = f"{symbol} ({name})" if name else symbol
-    user = f"Stock: {stock}\nScore the writer's view of this stock in each post.\n\n" + "\n\n".join(lines)
-    raw = chat([{"role": "system", "content": SYSTEM}, {"role": "user", "content": user}])
+    if kind == "sector":
+        subject = f"{symbol} ({name})" if name else symbol
+        user = (
+            f"Industry: {subject}\nScore the writer's view of this industry in each post.\n\n"
+            + "\n\n".join(lines)
+        )
+        system = SYSTEM_SECTOR
+    else:
+        stock = f"{symbol} ({name})" if name else symbol
+        user = f"Stock: {stock}\nScore the writer's view of this stock in each post.\n\n" + "\n\n".join(lines)
+        system = SYSTEM
+    raw = chat([{"role": "system", "content": system}, {"role": "user", "content": user}])
     return _parse_labels(raw, len(items))
 
 
@@ -329,6 +370,7 @@ def classify_posts(
     name: str = "",
     chat: Callable[[list[dict[str, str]]], str] | None = None,
     on_progress: Callable[[int, int], None] | None = None,
+    kind: str = "stock",
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     pending: list[tuple[int, dict[str, Any]]] = []
@@ -355,7 +397,7 @@ def classify_posts(
         batch = pending[start : start + chunk]
         payload = [{"i": j, "text": scoring_text(item)} for j, (_idx, item) in enumerate(batch)]
         try:
-            labels = _score_chunk(payload, symbol, name, chat_fn)
+            labels = _score_chunk(payload, symbol, name, chat_fn, kind=kind)
         except ScoreError:
             if chat is None:
                 raise
@@ -437,6 +479,7 @@ def write_thesis(
     bear: int = 0,
     neutral: int = 0,
     facts: list[str] | None = None,
+    kind: str = "stock",
 ) -> dict[str, str]:
     stock = f"{symbol} ({name})" if name else symbol
     score_s = "none" if score is None else str(score)
@@ -445,16 +488,29 @@ def write_thesis(
         fact_block = "\n".join(f"- {x}" for x in fact_items)
     else:
         fact_block = "(none)"
-    user = (
-        f"Listed name: {stock}\n"
-        f"Mood score: {score_s}\n"
-        f"Mood label: {label or 'unknown'}\n"
-        f"Counts: bull={bull} bear={bear} neutral={neutral}\n"
-        f"Company news and operating points:\n{fact_block}\n"
-        "Write a short mood line that states the mood score, plus a well thought-out two-sided case.\n"
-        "Use the given news and operating points. Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes."
-    )
-    messages = [{"role": "system", "content": THESIS_SYSTEM}, {"role": "user", "content": user}]
+    if kind == "sector":
+        user = (
+            f"Industry: {stock}\n"
+            f"Mood score: {score_s}\n"
+            f"Mood label: {label or 'unknown'}\n"
+            f"Counts: bull={bull} bear={bear} neutral={neutral}\n"
+            f"Industry news and operating points:\n{fact_block}\n"
+            "Write a short mood line that states the mood score, plus a well thought-out two-sided case.\n"
+            "Use the given news and operating points. Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes."
+        )
+        system = THESIS_SYSTEM_SECTOR
+    else:
+        user = (
+            f"Listed name: {stock}\n"
+            f"Mood score: {score_s}\n"
+            f"Mood label: {label or 'unknown'}\n"
+            f"Counts: bull={bull} bear={bear} neutral={neutral}\n"
+            f"Company news and operating points:\n{fact_block}\n"
+            "Write a short mood line that states the mood score, plus a well thought-out two-sided case.\n"
+            "Use the given news and operating points. Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes."
+        )
+        system = THESIS_SYSTEM
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
     try:
         if chat is not None:
             raw = chat(messages)
@@ -573,6 +629,29 @@ def _selftest() -> int:
     written = write_thesis("ZZZ", "Zed Co", chat=fake_thesis)
     if written != {"summary": "Steady.", "bull": "Customers stay.", "bear": "Rivals catch up."}:
         print("FAIL write_thesis")
+        failed += 1
+
+    def capture_kind(messages: list[dict[str, str]]) -> str:
+        blob = messages[0]["content"] + "\n" + messages[-1]["content"]
+        if "Industry:" not in messages[-1]["content"]:
+            raise AssertionError("sector prompt missing Industry:")
+        if "Caterpillar" in blob:
+            raise AssertionError("sector prompt mixed in a stock legal name")
+        n = len(re.findall(r"\[(\d+)\] ", messages[-1]["content"]))
+        return json.dumps({"labels": [{"i": i, "label": "bull", "why": "hold nudge"} for i in range(n)]})
+
+    sector_scored = classify_posts(
+        [{"id": "s", "text": "Should I hold software infrastructure here?"}],
+        symbol="Software - Infrastructure",
+        name="Technology",
+        kind="sector",
+        chat=capture_kind,
+    )
+    if sector_scored[0]["classification"] != "bull":
+        print("FAIL sector-score got=" + sector_scored[0]["classification"])
+        failed += 1
+    if "hold-nudge" not in SYSTEM or "hold-nudge" not in SYSTEM_SECTOR:
+        print("FAIL hold-nudge missing from scoring prompt")
         failed += 1
 
     def boom(_messages: list[dict[str, str]]) -> str:

@@ -22,6 +22,27 @@
     h1 { font-size: 22px; font-weight: 650; margin: 0 0 16px; }
     .hint { color: var(--muted); font-size: 13px; margin: 0 0 18px; }
     .row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 6px; }
+    .seg {
+      display: inline-flex;
+      border: 1px solid var(--edge);
+      border-radius: 8px;
+      overflow: hidden;
+      flex: 0 0 auto;
+    }
+    .seg button {
+      background: #21262d;
+      color: var(--muted);
+      border: 0;
+      padding: 10px 12px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .seg button.on {
+      background: #30363d;
+      color: var(--fg);
+    }
+    .field-slot { position: relative; }
     #status {
       display: block;
       font-size: 13px;
@@ -33,10 +54,76 @@
       text-align: left;
     }
     #status.err { color: var(--bear); }
-    input[name="ticker"] {
+    input[name="ticker"],
+    #sectorBox {
       background: #21262d; color: var(--fg); border: 1px solid var(--edge);
-      border-radius: 8px; padding: 10px 12px; font-size: 16px; width: 140px; letter-spacing: 0.04em;
+      border-radius: 8px; padding: 10px 12px; font-size: 16px; width: 140px;
     }
+    input[name="ticker"] { letter-spacing: 0.04em; }
+    #sectorBox { width: 260px; cursor: pointer; }
+    #sectorMenu {
+      display: none;
+      position: absolute;
+      top: calc(100% + 4px);
+      left: 0;
+      z-index: 30;
+      background: var(--panel);
+      border: 1px solid var(--edge);
+      border-radius: 8px;
+      min-width: 280px;
+      max-height: 340px;
+      overflow: auto;
+      padding: 8px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.4);
+    }
+    #sectorMenu.open { display: block; }
+    #sectorFilter {
+      width: 100%;
+      background: #21262d;
+      color: var(--fg);
+      border: 1px solid var(--edge);
+      border-radius: 6px;
+      padding: 8px 10px;
+      font-size: 13px;
+      margin-bottom: 8px;
+    }
+    .sec-hd {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      padding: 8px 8px 4px;
+    }
+    .sec-ind {
+      display: block;
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      color: var(--fg);
+      border: 0;
+      border-radius: 6px;
+      padding: 6px 10px 6px 16px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .sec-ind:hover { background: #21262d; }
+    .context {
+      color: var(--muted);
+      font-size: 13px;
+      margin: 8px 0 0;
+    }
+    .context.idle, .context:empty { display: none; }
+    .context button {
+      background: none;
+      border: 0;
+      padding: 0;
+      color: var(--muted);
+      font: inherit;
+      cursor: pointer;
+      text-align: left;
+    }
+    .context button:hover { color: var(--blue); }
     button#go {
       background: #1f6feb; color: #fff; border: 0; border-radius: 8px;
       padding: 10px 16px; font-size: 15px; cursor: pointer; font-weight: 600;
@@ -97,7 +184,20 @@
   <div class="wrap">
     <h1>Xmood</h1>
     <div class="row">
-      <input type="text" name="ticker" id="ticker" placeholder="Symbol" maxlength="12" autocomplete="off" autofocus />
+      <div class="seg" role="tablist" aria-label="Scan mode">
+        <button type="button" class="on" id="modeSymbol" role="tab" aria-selected="true">Symbol</button>
+        <button type="button" id="modeSector" role="tab" aria-selected="false">Sector</button>
+      </div>
+      <div class="field-slot" id="symbolSlot">
+        <input type="text" name="ticker" id="ticker" placeholder="Symbol" maxlength="12" autocomplete="off" autofocus />
+      </div>
+      <div class="field-slot" id="sectorSlot" hidden>
+        <input type="text" id="sectorBox" placeholder="Choose sector" readonly autocomplete="off" />
+        <div id="sectorMenu">
+          <input type="search" id="sectorFilter" placeholder="Filter" autocomplete="off" />
+          <div id="sectorList"></div>
+        </div>
+      </div>
       <button type="button" id="go">Pull</button>
     </div>
     <div id="status"></div>
@@ -112,6 +212,7 @@
           <text x="28" y="214" fill="#8b949e" font-size="12">0</text>
           <text x="352" y="214" fill="#8b949e" font-size="12">100</text>
         </svg>
+        <div class="context idle" id="contextLine"></div>
         <div class="score null idle" id="scoreNum"></div>
         <div class="label idle" id="scoreLabel">No result yet</div>
         <div id="bars" class="bars idle">
@@ -156,6 +257,12 @@
     };
 
     let LIVE = null;
+    let PULLING = false;
+    let MODE = "symbol";
+    let chosen = null;
+    let sectorPick = null;
+    let SECTORS = [];
+    let lookupTimer = 0;
 
     function polar(score) {
       const s = Math.max(0, Math.min(100, Number(score)));
@@ -212,13 +319,13 @@
       return Math.round(100 * n / d);
     }
 
-    function emptyPayload(ticker) {
-      const t = (ticker || "").toUpperCase();
+    function emptyPayload() {
       return {
-        ticker: t,
+        mode: MODE,
+        ticker: "",
         as_of: "",
         window: "last 7 days",
-        query: "$" + t + " -is:retweet",
+        query: "",
         credits_estimate_usd: 0.50,
         n_fetched: 0,
         n_kept: 0,
@@ -228,6 +335,9 @@
         neutral: 0,
         score: null,
         label: "",
+        industry: "",
+        sector: "",
+        company: "",
         posts: [],
         history: []
       };
@@ -237,13 +347,50 @@
       return p.text_original || p.text || "";
     }
 
+    function setContext(payload, ready) {
+      const el = document.getElementById("contextLine");
+      el.innerHTML = "";
+      if (!ready) {
+        el.className = "context idle";
+        return;
+      }
+      const isSector = (payload.mode || MODE) === "sector";
+      if (isSector) {
+        const sector = payload.sector || "";
+        if (!sector) {
+          el.className = "context idle";
+          return;
+        }
+        el.className = "context";
+        el.textContent = sector;
+        return;
+      }
+      const industry = payload.industry || "";
+      if (!industry) {
+        el.className = "context idle";
+        return;
+      }
+      el.className = "context";
+      const b = document.createElement("button");
+      b.type = "button";
+      b.textContent = industry;
+      b.addEventListener("click", () => {
+        if (PULLING) return;
+        pullSector(industry, payload.sector || "");
+      });
+      el.appendChild(b);
+    }
+
     function render(payload, notice) {
-      const t = (payload.ticker || "").toUpperCase();
       const ready = Boolean(payload.as_of) || (payload.posts || []).length || Number(payload.n_fetched || 0);
+      const isSector = (payload.mode || "") === "sector";
       document.getElementById("sub").textContent = ready
-        ? [payload.company, payload.display_ticker || payload.ticker].filter(Boolean).join(" · ")
+        ? (isSector
+          ? (payload.industry || payload.company || "")
+          : [payload.company, payload.display_ticker || payload.ticker].filter(Boolean).join(" · "))
         : "";
       setNeedle(ready ? payload.score : null);
+      setContext(payload, ready);
       const sn = document.getElementById("scoreNum");
       const sl = document.getElementById("scoreLabel");
       const bars = document.getElementById("bars");
@@ -323,9 +470,7 @@
       }
       if (notice) setStatus(notice, true);
       else if (!PULLING) setStatus("", false);
-
     }
-
 
     function showPicks(matches) {
       const box = document.getElementById("picks");
@@ -340,14 +485,13 @@
         b.querySelector("span").textContent = [m.name, m.exchange].filter(Boolean).join(" · ");
         b.addEventListener("click", () => {
           document.getElementById("ticker").value = m.symbol || "";
+          chosen = { symbol: m.symbol || "", name: m.name || "" };
           box.innerHTML = "";
           pullConfirmed(m.symbol, m.name);
         });
         box.appendChild(b);
       });
     }
-
-    let PULLING = false;
 
     function setStatus(text, isErr) {
       const st = document.getElementById("status");
@@ -361,6 +505,75 @@
       go.disabled = on;
       go.textContent = "Pull";
       go.setAttribute("aria-busy", on ? "true" : "false");
+    }
+
+    function setMode(mode, opts) {
+      MODE = mode === "sector" ? "sector" : "symbol";
+      const focus = !opts || opts.focus !== false;
+      const silent = Boolean(opts && opts.silent);
+      const symBtn = document.getElementById("modeSymbol");
+      const secBtn = document.getElementById("modeSector");
+      symBtn.classList.toggle("on", MODE === "symbol");
+      secBtn.classList.toggle("on", MODE === "sector");
+      symBtn.setAttribute("aria-selected", MODE === "symbol" ? "true" : "false");
+      secBtn.setAttribute("aria-selected", MODE === "sector" ? "true" : "false");
+      document.getElementById("symbolSlot").hidden = MODE !== "symbol";
+      document.getElementById("sectorSlot").hidden = MODE !== "sector";
+      closeSectorMenu();
+      const pb = document.getElementById("picks");
+      if (pb) pb.innerHTML = "";
+      setStatus("", false);
+      if (!silent) {
+        LIVE = null;
+        render(emptyPayload(), "");
+      }
+      if (!focus || PULLING) return;
+      if (MODE === "symbol") document.getElementById("ticker").focus();
+      else document.getElementById("sectorBox").focus();
+    }
+
+    function closeSectorMenu() {
+      document.getElementById("sectorMenu").classList.remove("open");
+    }
+
+    function openSectorMenu() {
+      document.getElementById("sectorMenu").classList.add("open");
+      const f = document.getElementById("sectorFilter");
+      f.value = "";
+      drawSectorList("");
+      f.focus();
+    }
+
+    function drawSectorList(filter) {
+      const box = document.getElementById("sectorList");
+      box.innerHTML = "";
+      const q = (filter || "").trim().toLowerCase();
+      (SECTORS || []).forEach(row => {
+        const sector = row.sector || "";
+        const inds = (row.industries || []).filter(n => {
+          if (!q) return true;
+          return String(n).toLowerCase().includes(q) || sector.toLowerCase().includes(q);
+        });
+        if (!inds.length) return;
+        const hd = document.createElement("div");
+        hd.className = "sec-hd";
+        hd.textContent = sector;
+        box.appendChild(hd);
+        inds.forEach(name => {
+          const b = document.createElement("button");
+          b.type = "button";
+          b.className = "sec-ind";
+          b.textContent = name;
+          b.addEventListener("click", () => pickIndustry(name, sector));
+          box.appendChild(b);
+        });
+      });
+    }
+
+    function pickIndustry(industry, sector) {
+      sectorPick = { industry, sector };
+      document.getElementById("sectorBox").value = industry;
+      closeSectorMenu();
     }
 
     async function consumePull(r, fallbackTicker) {
@@ -423,7 +636,13 @@
         const r = await fetch("/api/pull", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticker: symbol, symbol: symbol, name: name || "", confirmed: true })
+          body: JSON.stringify({
+            mode: "symbol",
+            ticker: symbol,
+            symbol: symbol,
+            name: name || "",
+            confirmed: true
+          })
         });
         await consumePull(r, symbol);
       } catch (e) {
@@ -433,11 +652,77 @@
       }
     }
 
+    async function pullSector(industry, sector) {
+      if (PULLING) return;
+      industry = (industry || "").trim();
+      if (!industry) {
+        setMode("sector");
+        openSectorMenu();
+        setStatus("Pick an industry from the list.", false);
+        return;
+      }
+      setMode("sector", { focus: false });
+      sectorPick = { industry, sector: sector || "" };
+      document.getElementById("sectorBox").value = industry;
+      closeSectorMenu();
+      const pb = document.getElementById("picks");
+      if (pb) pb.innerHTML = "";
+      setPulling(true);
+      setStatus("Searching X…", false);
+      try {
+        const r = await fetch("/api/pull", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            mode: "sector",
+            industry,
+            sector: sector || ""
+          })
+        });
+        await consumePull(r, industry);
+      } catch (e) {
+        setStatus("Could not reach the local server. Is it running?", true);
+      } finally {
+        setPulling(false);
+      }
+    }
+
+    async function lookupTyped(typed) {
+      if (MODE !== "symbol") return;
+      typed = (typed || "").trim();
+      if (!typed) {
+        const pb = document.getElementById("picks");
+        if (pb) pb.innerHTML = "";
+        return;
+      }
+      try {
+        const r = await fetch("/api/lookup?q=" + encodeURIComponent(typed));
+        const j = await r.json().catch(() => ({}));
+        if (MODE !== "symbol" || PULLING) return;
+        showPicks(j.matches || []);
+      } catch (e) {}
+    }
+
     async function pull() {
       if (PULLING) return;
+      if (MODE === "sector") {
+        if (!sectorPick || !sectorPick.industry) {
+          openSectorMenu();
+          setStatus("Pick an industry from the list.", false);
+          return;
+        }
+        await pullSector(sectorPick.industry, sectorPick.sector);
+        return;
+      }
       const typed = (document.getElementById("ticker").value || "").trim().toUpperCase();
       if (!typed) {
         document.getElementById("ticker").focus();
+        return;
+      }
+      if (chosen && (chosen.symbol || "").toUpperCase() === typed) {
+        const pb = document.getElementById("picks");
+        if (pb) pb.innerHTML = "";
+        await pullConfirmed(chosen.symbol, chosen.name);
         return;
       }
       const pb = document.getElementById("picks"); if (pb) pb.innerHTML = "";
@@ -447,7 +732,7 @@
         const r = await fetch("/api/pull", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ ticker: typed })
+          body: JSON.stringify({ mode: "symbol", ticker: typed })
         });
         await consumePull(r, typed);
       } catch (e) {
@@ -461,15 +746,64 @@
     document.getElementById("ticker").addEventListener("keydown", e => {
       if (e.key === "Enter") pull();
     });
+    document.getElementById("ticker").addEventListener("input", () => {
+      chosen = null;
+      const typed = (document.getElementById("ticker").value || "").trim();
+      clearTimeout(lookupTimer);
+      lookupTimer = setTimeout(() => lookupTyped(typed), 180);
+    });
+    document.getElementById("modeSymbol").addEventListener("click", () => setMode("symbol"));
+    document.getElementById("modeSector").addEventListener("click", () => setMode("sector"));
+    document.getElementById("sectorBox").addEventListener("focus", () => {
+      if (!PULLING) openSectorMenu();
+    });
+    document.getElementById("sectorBox").addEventListener("click", () => {
+      if (!PULLING) openSectorMenu();
+    });
+    document.getElementById("sectorBox").addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        pull();
+      } else if (e.key === "Escape") {
+        closeSectorMenu();
+      } else if (e.key.length === 1 || e.key === "Backspace") {
+        openSectorMenu();
+      }
+    });
+    document.getElementById("sectorFilter").addEventListener("input", e => {
+      drawSectorList(e.target.value);
+    });
+    document.getElementById("sectorFilter").addEventListener("keydown", e => {
+      if (e.key === "Escape") {
+        closeSectorMenu();
+        document.getElementById("sectorBox").focus();
+      }
+    });
+    document.addEventListener("click", e => {
+      const slot = document.getElementById("sectorSlot");
+      if (slot && !slot.contains(e.target)) closeSectorMenu();
+    });
 
     drawBands();
     render(LAST_PAYLOAD, "");
+
+    fetch("/api/sectors")
+      .then(r => { if (!r.ok) throw new Error("no sectors"); return r.json(); })
+      .then(j => { SECTORS = j.sectors || []; })
+      .catch(() => {});
 
     fetch("/api/status")
       .then(r => { if (!r.ok) throw new Error("no status"); return r.json(); })
       .then(j => {
         if (!j || j.status === "idle" || (!j.n_fetched && !(j.posts || []).length)) return;
         LIVE = j;
+        if (j.mode === "sector") {
+          setMode("sector", { focus: false, silent: true });
+          if (j.industry) {
+            sectorPick = { industry: j.industry, sector: j.sector || "" };
+            document.getElementById("sectorBox").value = j.industry;
+          }
+        }
         render(j, "");
       })
       .catch(() => {});

@@ -1,6 +1,6 @@
 # Xmood
 
-Xmood is a local web app that pulls recent X posts for a ticker and scores each post with the `grok` command on the same machine.
+Xmood is a local web app that pulls recent X posts for a ticker or a Yahoo industry and scores each post with the `grok` command on the same machine.
 
 ## Requirements
 
@@ -27,6 +27,15 @@ If the Grok binary is not named `grok` or is not on `PATH`, set `GROK_BIN` to it
 python3 server.py
 ```
 
-Open [http://127.0.0.1:8787](http://127.0.0.1:8787). Enter a ticker and click Pull.
+Open [http://127.0.0.1:8787](http://127.0.0.1:8787). Symbol is the default: type a ticker, pick a Yahoo listing, then Pull. Switch to Sector to pick a Yahoo industry (no free text) and Pull that.
+
+After a ticker result, the muted industry line under the gauge runs a sector pull for that Yahoo industry.
+
+To restart after an update, stop the running `python3 server.py` process (Ctrl+C in that terminal) and start it again from the repo:
+
+```bash
+source .venv/bin/activate
+python3 server.py
+```
 
 About $0.50 per 100 posts is billed to the X account that owns the token.
