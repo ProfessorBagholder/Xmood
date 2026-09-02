@@ -234,24 +234,35 @@ def _yahoo_news(q: str) -> list[str]:
     return out
 
 
+def _x_stem(symbol: str) -> str:
+    tag = (symbol or "").strip().lstrip("$")
+    return tag.split(".", 1)[0] if tag else ""
+
+
 def _query(symbol: str, name: str) -> str:
-    # Letter-only tags use the X cashtag. A dotted tag is quoted so $CH.V is not read as $CH.
-    tag = symbol.strip()
-    if re.fullmatch(r"[A-Za-z0-9]+", tag):
-        cashtag = "$" + tag
-    else:
-        cashtag = '"$' + tag + '"'
-    return cashtag + " -is:retweet"
+    # X posts use $QNC, not $QNC.V. Search the stem; keep the dotted tag as a second match.
+    tag = (symbol or "").strip().lstrip("$")
+    stem = _x_stem(tag)
+    if not stem:
+        return "-is:retweet"
+    if "." in tag and tag.upper() != stem.upper():
+        return f'${stem} OR "${tag}" -is:retweet'
+    return f"${stem} -is:retweet"
 
 
 def _post_hits_symbol(text: str, symbol: str, name: str) -> bool:
     blob = text or ""
-    pat = re.compile(r"\$" + re.escape(symbol) + r"(?![A-Za-z0-9])", re.I)
-    if pat.search(blob):
-        return True
+    tag = (symbol or "").strip().lstrip("$")
+    stem = _x_stem(tag)
+    for piece in dict.fromkeys([stem, tag]):
+        if not piece:
+            continue
+        if re.search(r"\$" + re.escape(piece) + r"(?![A-Za-z0-9])", blob, re.I):
+            return True
     if name and name.lower() in blob.lower():
         return True
     return False
+
 
 
 def _translate(text: str, lang: str | None) -> tuple[str, bool]:
