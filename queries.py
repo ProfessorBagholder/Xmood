@@ -77,19 +77,11 @@ def symbol_query(symbol: str, name: str = "") -> str:
 
 
 def sector_query(industry: str, sector: str = "") -> str:
-    """Quoted industry phrase, plus parent sector when it is not already in the name. No legal name."""
+    """Quoted industry phrase only. Parent sector is too broad (Industrials is not Waste Management)."""
     industry = (industry or "").strip()
-    sector = (sector or "").strip()
-    bits: list[str] = []
-    if industry:
-        bits.append(f'"{industry}"')
-    if sector and _norm_name(sector) not in _norm_name(industry):
-        bits.append(f'"{sector}"')
-    if not bits:
+    if not industry:
         return "-is:retweet"
-    if len(bits) == 1:
-        return bits[0] + " -is:retweet"
-    return "(" + " OR ".join(bits) + ") -is:retweet"
+    return f'"{industry}" -is:retweet'
 
 
 def _selftest() -> int:
@@ -121,6 +113,10 @@ def _selftest() -> int:
     check("Caterpillar" not in sec and "Quantum" not in sec, "sector query mixed in a stock legal name")
     check("$CAT" not in sec, "sector query must not use a cashtag")
     check("-is:retweet" in sec, "sector query needs -is:retweet")
+    wm = sector_query("Waste Management", "Industrials")
+    check("Waste Management" in wm, "Waste Management missing from industry query")
+    check("Industrials" not in wm, "parent sector must not be in the X search got=" + wm)
+
 
     tax = load_taxonomy()
     n_sec = len(tax)

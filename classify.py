@@ -73,7 +73,7 @@ Read the whole post. Grade what the writer is doing with this industry in front 
 bull: the writer is talking this industry up. That includes saying they are buying names in it, expecting a rise, cheering, or posting strong results or other good operating news as the point of the post. A hold-nudge question (holding, adding, buying more, or whether it is too late) is bull.
 bear: the writer is talking this industry down. That includes selling, expecting a fall, or posting a miss, a warning, or other bad news as the point of the post.
 neutral: they are actually asking for information with no lean, or a true even split, or nothing about whether things are going well or badly. A question that teases someone for not holding, or implies they should already own it, is bull, not a genuine question.
-spam: ads or a pile of unrelated tickers.
+spam: not about this industry, ads, or a pile of unrelated tickers. A post about another industry or the broad market is spam.
 
 Score the writer's meaning in any language. Do not treat a question mark as no view by itself.
 
