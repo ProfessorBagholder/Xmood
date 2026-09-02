@@ -23,6 +23,7 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
 from classify import SKIP_WHY, ScoreError, classify_posts, score_from_counts, scoring_ready, scorer_info, write_thesis  # noqa: E402
+from queries import load_taxonomy, parent_sector, sector_query, symbol_query  # noqa: E402
 
 STATIC = ROOT / "static"
 RESULTS = ROOT / "results"
@@ -35,10 +36,13 @@ app = FastAPI(title="Xmood")
 
 
 class PullIn(BaseModel):
-    ticker: str
+    ticker: str = ""
     symbol: str | None = None
     name: str | None = None
     confirmed: bool = False
+    mode: str = "symbol"
+    industry: str | None = None
+    sector: str | None = None
 
 
 def _now() -> str:
@@ -239,23 +243,41 @@ def _x_stem(symbol: str) -> str:
     return tag.split(".", 1)[0] if tag else ""
 
 
+def _yahoo_profile(symbol: str) -> dict[str, str]:
+    import httpx
+
+    symbol = (symbol or "").strip()
+    empty = {"industry": "", "sector": ""}
+    if not symbol:
+        return empty
+    headers = {"User-Agent": "Mozilla/5.0"}
+    try:
+        with httpx.Client(timeout=20.0, headers=headers, follow_redirects=True) as client:
+            client.get("https://finance.yahoo.com")
+            crumb = (client.get("https://query1.finance.yahoo.com/v1/test/getcrumb").text or "").strip()
+            r = client.get(
+                f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
+                params={"modules": "assetProfile", "crumb": crumb},
+            )
+    except Exception:
+        return empty
+    if r.status_code >= 400:
+        return empty
+    results = ((r.json() or {}).get("quoteSummary") or {}).get("result") or []
+    if not results or not isinstance(results[0], dict):
+        return empty
+    prof = results[0].get("assetProfile") or results[0].get("summaryProfile") or {}
+    if not isinstance(prof, dict):
+        return empty
+    industry = str(prof.get("industryDisp") or prof.get("industry") or "").strip()
+    sector = str(prof.get("sectorDisp") or prof.get("sector") or "").strip()
+    if industry and not sector:
+        sector = parent_sector(industry)
+    return {"industry": industry, "sector": sector}
+
+
 def _query(symbol: str, name: str) -> str:
-    # Keep the listing tag (QNC.V). Also search the undotted cashtag and the company name.
-    tag = (symbol or "").strip().lstrip("$")
-    stem = _x_stem(tag)
-    bits: list[str] = []
-    if "." in tag:
-        bits.append('"$' + tag + '"')
-        if stem:
-            bits.append("$" + stem)
-        nm = (name or "").strip()
-        if nm:
-            bits.append('"' + nm + '"')
-    elif stem:
-        bits.append("$" + stem)
-    if not bits:
-        return "-is:retweet"
-    return "(" + " OR ".join(bits) + ") -is:retweet"
+    return symbol_query(symbol, name)
 
 
 def _post_hits_symbol(text: str, symbol: str, name: str) -> bool:
@@ -347,12 +369,29 @@ def _search_x(query: str, token: str) -> list[dict[str, Any]]:
     return out
 
 
-def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note=None) -> dict[str, Any]:
+def _payload(
+    symbol: str,
+    name: str,
+    query: str,
+    raw: list[dict[str, Any]],
+    note=None,
+    *,
+    kind: str = "stock",
+    industry: str = "",
+    sector: str = "",
+) -> dict[str, Any]:
     posts: list[dict[str, Any]] = []
     dropped_wrong = 0
-    hits = [tw for tw in raw if _post_hits_symbol(tw.get("text") or "", symbol, name)]
-    dropped_wrong = len(raw) - len(hits)
-    n_hits = len(hits)
+    if kind == "sector":
+        hits = list(raw)
+        dropped_wrong = 0
+        score_symbol = industry or symbol
+        score_name = sector
+    else:
+        hits = [tw for tw in raw if _post_hits_symbol(tw.get("text") or "", symbol, name)]
+        dropped_wrong = len(raw) - len(hits)
+        score_symbol = symbol
+        score_name = name
     for i, tw in enumerate(hits, 1):
         if note and i == 1:
             note("Searching X…")
@@ -383,7 +422,13 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
     try:
         if note:
             note("Scoring…")
-        classified = classify_posts(posts, symbol=symbol, name=name, on_progress=_score_progress)
+        classified = classify_posts(
+            posts,
+            symbol=score_symbol,
+            name=score_name,
+            kind="sector" if kind == "sector" else "stock",
+            on_progress=_score_progress,
+        )
     except ScoreError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     kept = [p for p in classified if p.get("classification") != "spam"]
@@ -393,7 +438,7 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
     neut = sum(1 for p in kept if p.get("classification") == "neutral")
     score, label = score_from_counts(bull, bear, neut)
     if not classified:
-        label = "No posts matched that exact tag"
+        label = "No posts matched that industry" if kind == "sector" else "No posts matched that exact tag"
     facts: list[str] = []
     seen_facts: set[str] = set()
 
@@ -407,10 +452,17 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
         seen_facts.add(key)
         facts.append(t)
 
-    for headline in _yahoo_news(symbol) + (_yahoo_news(name) if name else []):
+    if kind == "sector":
+        news_q = [industry] + ([sector] if sector else [])
+    else:
+        news_q = [symbol] + ([name] if name else [])
+    for qn in news_q:
+        for headline in _yahoo_news(qn):
+            if len(facts) >= 16:
+                break
+            _add_fact(headline)
         if len(facts) >= 16:
             break
-        _add_fact(headline)
     for p in kept:
         if len(facts) >= 16:
             break
@@ -423,22 +475,44 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
         note("Writing thesis…")
     try:
         thesis = write_thesis(
-            symbol,
-            name,
+            score_symbol,
+            score_name,
             score=score,
             label=label,
             bull=bull,
             bear=bear,
             neutral=neut,
             facts=facts,
+            kind="sector" if kind == "sector" else "stock",
         )
     except Exception:
         thesis = {"summary": "", "bull": "", "bear": ""}
     as_of = _now()
+    if kind == "sector":
+        profile_industry = industry
+        profile_sector = sector
+        company = industry
+        display = ""
+        hist_key = "SEC:" + industry
+        ticker_out = ""
+    else:
+        if not (industry and sector):
+            profile = _yahoo_profile(symbol)
+            industry = industry or profile.get("industry") or ""
+            sector = sector or profile.get("sector") or ""
+        profile_industry = industry
+        profile_sector = sector
+        company = name
+        display = symbol
+        hist_key = symbol
+        ticker_out = symbol
     result = {
-        "ticker": symbol,
-        "display_ticker": symbol,
-        "company": name,
+        "mode": "sector" if kind == "sector" else "symbol",
+        "ticker": ticker_out,
+        "display_ticker": display,
+        "company": company,
+        "industry": profile_industry,
+        "sector": profile_sector,
         "as_of": as_of,
         "window": "last 7 days",
         "query": query,
@@ -468,7 +542,7 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
     _append_history(
         {
             "as_of": as_of,
-            "ticker": symbol,
+            "ticker": hist_key,
             "score": score,
             "bull": bull,
             "bear": bear,
@@ -476,9 +550,9 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
             "n_kept": len(kept),
         }
     )
-    result["history"] = _load_history(symbol)
+    result["history"] = _load_history(hist_key)
     (RESULTS / "current.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    safe = re.sub(r"[^A-Za-z0-9._-]", "_", symbol)
+    safe = re.sub(r"[^A-Za-z0-9._-]", "_", hist_key)
     (RESULTS / f"{safe}.json").write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     return result
 
@@ -493,52 +567,12 @@ def api_lookup(q: str = "") -> JSONResponse:
     return JSONResponse({"matches": _yahoo_lookup(q)})
 
 
-@app.post("/api/pull")
-def api_pull(body: PullIn):
-    ticker = (body.ticker or "").strip().upper()
-    if not TICKER_RE.match(ticker):
-        raise HTTPException(status_code=400, detail="Ticker must be letters, digits, or dots.")
-    if not (body.confirmed and (body.symbol or ticker)):
-        matches = _yahoo_lookup(ticker)
-        if not matches:
-            return JSONResponse(
-                {
-                    "status": "none",
-                    "detail": "None found.",
-                    "matches": [],
-                }
-            )
-        return JSONResponse(
-            {
-                "status": "pick",
-                "detail": "Pick a listing, then Pull runs that exact tag.",
-                "matches": matches,
-            }
-        )
-    token = _token()
-    if not token:
-        raise HTTPException(
-            status_code=400,
-            detail="Add X_BEARER_TOKEN to the .env file next to this app.",
-        )
-    if not scoring_ready():
-        raise HTTPException(
-            status_code=400,
-            detail="Scoring uses the grok command on this computer. It was not found on PATH. Set GROK_BIN in .env if needed.",
-        )
-    matches = _yahoo_lookup(ticker)
-    chosen = {
-        "symbol": (body.symbol or ticker).strip(),
-        "name": (body.name or "").strip(),
-    }
-    if not chosen["name"]:
-        hit = [m for m in matches if m["symbol"].upper() == chosen["symbol"].upper()]
-        if hit:
-            chosen["name"] = hit[0]["name"]
+@app.get("/api/sectors")
+def api_sectors() -> JSONResponse:
+    return JSONResponse({"sectors": load_taxonomy()})
 
-    symbol = chosen["symbol"]
-    name = chosen.get("name") or ""
-    query = _query(symbol, name)
+
+def _stream_pull(work_fn):
     q = queue.Queue()
 
     def note(msg: str) -> None:
@@ -546,10 +580,7 @@ def api_pull(body: PullIn):
 
     def work() -> None:
         try:
-            note("Searching X…")
-            raw = _search_x(query, token)
-            result = _payload(symbol, name, query, raw, note=note)
-            q.put(("done", result))
+            work_fn(note, q)
         except HTTPException as e:
             q.put(("error", e.detail))
         except Exception as e:
@@ -571,6 +602,114 @@ def api_pull(body: PullIn):
         t.join(timeout=2)
 
     return StreamingResponse(events(), media_type="application/x-ndjson")
+
+
+def _ready_to_search() -> tuple[str, None] | tuple[None, str]:
+    token = _token()
+    if not token:
+        return None, "Add X_BEARER_TOKEN to the .env file next to this app."
+    if not scoring_ready():
+        return None, (
+            "Scoring uses the grok command on this computer. It was not found on PATH. "
+            "Set GROK_BIN in .env if needed."
+        )
+    return token, None
+
+
+@app.post("/api/pull")
+def api_pull(body: PullIn):
+    mode = (body.mode or "symbol").strip().lower()
+    if mode == "sector":
+        industry = (body.industry or "").strip()
+        if not industry:
+            raise HTTPException(status_code=400, detail="Pick an industry from the list.")
+        sector = (body.sector or "").strip() or parent_sector(industry)
+        token, err = _ready_to_search()
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+        query = sector_query(industry, sector)
+
+        def work(note, q) -> None:
+            note("Searching X…")
+            raw = _search_x(query, token)
+            result = _payload(
+                "",
+                "",
+                query,
+                raw,
+                note=note,
+                kind="sector",
+                industry=industry,
+                sector=sector,
+            )
+            q.put(("done", result))
+
+        return _stream_pull(work)
+
+    ticker = (body.ticker or "").strip().upper()
+    if not TICKER_RE.match(ticker):
+        raise HTTPException(status_code=400, detail="Ticker must be letters, digits, or dots.")
+    if not (body.confirmed and (body.symbol or ticker)):
+        matches = _yahoo_lookup(ticker)
+        if not matches:
+            return JSONResponse(
+                {
+                    "status": "none",
+                    "detail": "None found.",
+                    "matches": [],
+                }
+            )
+        return JSONResponse(
+            {
+                "status": "pick",
+                "detail": "Pick a listing, then Pull runs that exact tag.",
+                "matches": matches,
+            }
+        )
+    token, err = _ready_to_search()
+    if err:
+        raise HTTPException(status_code=400, detail=err)
+    matches = _yahoo_lookup(ticker)
+    chosen = {
+        "symbol": (body.symbol or ticker).strip(),
+        "name": (body.name or "").strip(),
+    }
+    if not chosen["name"]:
+        hit = [m for m in matches if m["symbol"].upper() == chosen["symbol"].upper()]
+        if hit:
+            chosen["name"] = hit[0]["name"]
+
+    symbol = chosen["symbol"]
+    name = chosen.get("name") or ""
+    query = _query(symbol, name)
+
+    def work(note, q) -> None:
+        note("Searching X…")
+        profile = {"industry": "", "sector": ""}
+
+        def fetch_profile() -> None:
+            try:
+                profile.update(_yahoo_profile(symbol))
+            except Exception:
+                pass
+
+        t_prof = threading.Thread(target=fetch_profile, daemon=True)
+        t_prof.start()
+        raw = _search_x(query, token)
+        t_prof.join(timeout=12)
+        result = _payload(
+            symbol,
+            name,
+            query,
+            raw,
+            note=note,
+            kind="stock",
+            industry=profile.get("industry") or "",
+            sector=profile.get("sector") or "",
+        )
+        q.put(("done", result))
+
+    return _stream_pull(work)
 
 
 @app.get("/api/status")
