@@ -106,7 +106,7 @@ def label_for_score(score: int | None) -> str:
 
 
 def score_from_counts(bull: int, bear: int) -> tuple[int | None, str]:
-    if bull + bear < 8:
+    if bull + bear < 1:
         return None, "Not enough directional posts"
     score = round(100 * bull / (bull + bear))
     return score, label_for_score(score)
