@@ -320,23 +320,13 @@ def classify_posts(
     if on_progress:
         on_progress(0, total)
 
-    def _label_batch(batch):
-        payload = [{"i": j, "text": scoring_text(item)} for j, (_idx, item) in enumerate(batch)]
-        try:
-            labels = _score_chunk(payload, symbol, name, chat_fn)
-        except ScoreError:
-            labels = None
-        failed = labels is None or (
-            len(batch) > 1 and all(lab.get("why") == SKIP_WHY for lab in labels)
-        )
-        if not failed:
-            return labels
-        if len(batch) == 1:
-            return [{"label": "neutral", "why": SKIP_WHY}]
-        mid = len(batch) // 2
-        return _label_batch(batch[:mid]) + _label_batch(batch[mid:])
-
-    labels = _label_batch(pending)
+    payload = [{"i": j, "text": scoring_text(item)} for j, (_idx, item) in enumerate(pending)]
+    try:
+        labels = _score_chunk(payload, symbol, name, chat_fn)
+    except ScoreError:
+        labels = _unlabeled(total)
+    if labels is None or len(labels) != total:
+        labels = _unlabeled(total)
     for (_idx, item), lab in zip(pending, labels):
         item["classification"] = lab["label"]
         item["reason"] = lab["why"]
@@ -416,8 +406,8 @@ def _selftest() -> int:
     if mixed[0]["classification"] != "neutral" or mixed[0]["reason"] != SKIP_WHY:
         print("FAIL skip-unparsed got=" + mixed[0]["classification"] + "/" + mixed[0]["reason"])
         failed += 1
-    if mixed[1]["classification"] != "bull":
-        print("FAIL keep-rest got=" + mixed[1]["classification"])
+    if mixed[1]["classification"] != "neutral" or mixed[1]["reason"] != SKIP_WHY:
+        print("FAIL skip-rest got=" + mixed[1]["classification"])
         failed += 1
 
     cmd = _grok_cmd("/tmp/grok", "prompt")
