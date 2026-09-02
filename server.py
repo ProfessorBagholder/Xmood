@@ -60,22 +60,19 @@ def _token() -> str:
     return (os.environ.get("X_BEARER_TOKEN") or "").strip()
 
 
-_CA_LISTING_SUFFIXES = (".CN", ".V", ".TO", ".NE")
-
-
 def _quote_row(row: dict) -> dict[str, str] | None:
     if not isinstance(row, dict):
         return None
     sym = str(row.get("symbol") or "").strip()
-    if not sym:
+    if not sym or "=" in sym:
         return None
-    longname = str(row.get("longname") or "").strip()
-    shortname = str(row.get("shortname") or "").strip()
+    longname = str(row.get("longname") or row.get("longName") or "").strip()
+    shortname = str(row.get("shortname") or row.get("shortName") or row.get("name") or "").strip()
     return {
         "symbol": sym,
         "name": longname or shortname,
         "exchange": str(row.get("exchDisp") or row.get("exchange") or "").strip(),
-        "type": str(row.get("quoteType") or "").strip(),
+        "type": str(row.get("quoteType") or row.get("typeDisp") or "").strip(),
     }
 
 
@@ -94,44 +91,97 @@ def _yahoo_quotes(client, q: str) -> list[dict[str, str]]:
     return out
 
 
+def _yahoo_lookup_docs(client, q: str) -> list[dict[str, str]]:
+    r = client.get(
+        "https://query1.finance.yahoo.com/v1/finance/lookup",
+        params={"query": q, "type": "equity", "count": 40},
+    )
+    if r.status_code >= 400:
+        return []
+    out: list[dict[str, str]] = []
+    for result in ((r.json() or {}).get("finance") or {}).get("result") or []:
+        if not isinstance(result, dict):
+            continue
+        for row in result.get("documents") or []:
+            parsed = _quote_row(row)
+            if parsed:
+                out.append(parsed)
+    return out
+
+
+def _keeps_typed(sym: str, typed: str) -> bool:
+    typed_u = (typed or "").strip().upper()
+    s = (sym or "").strip().upper()
+    if not typed_u or not s or "=" in s:
+        return False
+    if s == typed_u:
+        return True
+    root = s.split(".", 1)[0]
+    return root == typed_u
+
+
+def _prefer_equity(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    equities = [row for row in rows if (row.get("type") or "").upper() == "EQUITY"]
+    return equities or rows
+
+
+def _fill_empty_names(client, rows: list[dict[str, str]]) -> None:
+    for row in rows:
+        if (row.get("name") or "").strip():
+            continue
+        sym = row["symbol"]
+        for hit in _yahoo_quotes(client, sym):
+            if hit["symbol"].upper() != sym.upper():
+                continue
+            if hit.get("name"):
+                row["name"] = hit["name"]
+            if hit.get("exchange") and not row.get("exchange"):
+                row["exchange"] = hit["exchange"]
+            if hit.get("type") and not row.get("type"):
+                row["type"] = hit["type"]
+            break
+        if (row.get("name") or "").strip():
+            continue
+        r = client.get(
+            "https://query1.finance.yahoo.com/v7/finance/quote",
+            params={"symbols": sym},
+        )
+        if r.status_code >= 400:
+            continue
+        for qrow in ((r.json() or {}).get("quoteResponse") or {}).get("result") or []:
+            if not isinstance(qrow, dict):
+                continue
+            if str(qrow.get("symbol") or "").upper() != sym.upper():
+                continue
+            name = str(qrow.get("longName") or qrow.get("shortName") or "").strip()
+            if name:
+                row["name"] = name
+            break
+
+
 def _yahoo_lookup(q: str) -> list[dict[str, str]]:
     import httpx
 
     q = (q or "").strip()
     if not q:
         return []
-    undotted = "." not in q
-    queries = [q]
-    if undotted:
-        root = q.upper()
-        queries.extend(root + suf for suf in _CA_LISTING_SUFFIXES)
     headers = {"User-Agent": "Mozilla/5.0"}
     out: list[dict[str, str]] = []
     seen: set[str] = set()
     with httpx.Client(timeout=20.0, headers=headers) as client:
-        for query in queries:
-            for row in _yahoo_quotes(client, query):
-                key = row["symbol"].upper()
-                if key in seen:
-                    continue
-                seen.add(key)
-                out.append(row)
-    if undotted:
-        root = q.upper()
-        out = [
-            row
-            for row in out
-            if (sym := row["symbol"].upper()) == root or sym.startswith(root + ".")
-        ]
-
-        def _ca_first(row: dict[str, str]) -> int:
-            sym = row["symbol"].upper()
-            if any(sym == root + suf for suf in _CA_LISTING_SUFFIXES):
-                return 0
-            return 1
-
-        out.sort(key=_ca_first)
-    return out
+        rows = list(_yahoo_quotes(client, q))
+        if "." not in q:
+            rows.extend(_yahoo_lookup_docs(client, q + "."))
+        for row in rows:
+            key = row["symbol"].upper()
+            if key in seen:
+                continue
+            if not _keeps_typed(row["symbol"], q):
+                continue
+            seen.add(key)
+            out.append(row)
+        _fill_empty_names(client, out)
+    return _prefer_equity(out)
 
 
 def _yahoo_news(q: str) -> list[str]:
