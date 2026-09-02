@@ -63,41 +63,66 @@ def _token() -> str:
 _CA_LISTING_SUFFIXES = (".CN", ".V", ".TO", ".NE")
 
 
+def _quote_row(row: dict) -> dict[str, str] | None:
+    if not isinstance(row, dict):
+        return None
+    sym = str(row.get("symbol") or "").strip()
+    if not sym:
+        return None
+    longname = str(row.get("longname") or "").strip()
+    shortname = str(row.get("shortname") or "").strip()
+    return {
+        "symbol": sym,
+        "name": longname or shortname,
+        "exchange": str(row.get("exchDisp") or row.get("exchange") or "").strip(),
+        "type": str(row.get("quoteType") or "").strip(),
+    }
+
+
+def _yahoo_quotes(client, q: str) -> list[dict[str, str]]:
+    r = client.get(
+        "https://query1.finance.yahoo.com/v1/finance/search",
+        params={"q": q, "quotesCount": 12, "newsCount": 0},
+    )
+    if r.status_code >= 400:
+        return []
+    out: list[dict[str, str]] = []
+    for row in (r.json() or {}).get("quotes") or []:
+        parsed = _quote_row(row)
+        if parsed:
+            out.append(parsed)
+    return out
+
+
 def _yahoo_lookup(q: str) -> list[dict[str, str]]:
     import httpx
 
     q = (q or "").strip()
     if not q:
         return []
+    undotted = "." not in q
+    queries = [q]
+    if undotted:
+        root = q.upper()
+        queries.extend(root + suf for suf in _CA_LISTING_SUFFIXES)
     headers = {"User-Agent": "Mozilla/5.0"}
-    with httpx.Client(timeout=20.0, headers=headers) as client:
-        r = client.get(
-            "https://query1.finance.yahoo.com/v1/finance/search",
-            params={"q": q, "quotesCount": 12, "newsCount": 0},
-        )
-    if r.status_code >= 400:
-        return []
     out: list[dict[str, str]] = []
     seen: set[str] = set()
-    for row in (r.json() or {}).get("quotes") or []:
-        if not isinstance(row, dict):
-            continue
-        sym = str(row.get("symbol") or "").strip()
-        if not sym or sym.upper() in seen:
-            continue
-        seen.add(sym.upper())
-        longname = str(row.get("longname") or "").strip()
-        shortname = str(row.get("shortname") or "").strip()
-        out.append(
-            {
-                "symbol": sym,
-                "name": longname or shortname,
-                "exchange": str(row.get("exchDisp") or row.get("exchange") or "").strip(),
-                "type": str(row.get("quoteType") or "").strip(),
-            }
-        )
-    if "." not in q:
+    with httpx.Client(timeout=20.0, headers=headers) as client:
+        for query in queries:
+            for row in _yahoo_quotes(client, query):
+                key = row["symbol"].upper()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(row)
+    if undotted:
         root = q.upper()
+        out = [
+            row
+            for row in out
+            if (sym := row["symbol"].upper()) == root or sym.startswith(root + ".")
+        ]
 
         def _ca_first(row: dict[str, str]) -> int:
             sym = row["symbol"].upper()
@@ -411,7 +436,7 @@ def api_pull(body: PullIn):
             hit = [m for m in matches if m["symbol"].upper() == chosen["symbol"].upper()]
             if hit:
                 chosen["name"] = hit[0]["name"]
-    elif exact:
+    elif exact and ("." in ticker or len(matches) == 1):
         chosen = exact[0]
     elif len(matches) == 1:
         chosen = matches[0]
