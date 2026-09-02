@@ -316,10 +316,61 @@
       });
     }
 
-    async function pullConfirmed(symbol, name) {
+        async function consumePull(r, fallbackTicker) {
+      const go = document.getElementById("go");
+      const ctype = (r.headers.get("content-type") || "").toLowerCase();
+      if (ctype.includes("ndjson") || ctype.includes("jsonl")) {
+        const reader = r.body.getReader();
+        const dec = new TextDecoder();
+        let buf = "";
+        let last = null;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let nl;
+          while ((nl = buf.indexOf("\n")) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            const ev = JSON.parse(line);
+            if (ev.t === "status" && ev.text) go.textContent = ev.text;
+            if (ev.t === "error") {
+              render(emptyPayload(fallbackTicker), ev.detail || "Pull failed.");
+              document.getElementById("status").className = "err";
+              return;
+            }
+            if (ev.t === "done") last = ev.result;
+          }
+        }
+        if (last) {
+          LIVE = last;
+          document.getElementById("status").className = "meta";
+          render(last, "");
+        }
+        return;
+      }
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        render(emptyPayload(fallbackTicker), j.detail || "Pull failed.");
+        document.getElementById("status").className = "err";
+        return;
+      }
+      if (j.status === "pick") {
+        showPicks(j.matches || []);
+        render(emptyPayload(fallbackTicker), j.detail || "Pick the listing.");
+        document.getElementById("status").className = "meta";
+        return;
+      }
+      LIVE = j;
+      document.getElementById("status").className = "meta";
+      render(j, "");
+    }
+
+async function pullConfirmed(symbol, name) {
       const go = document.getElementById("go");
       go.disabled = true;
-      document.getElementById("go").textContent = "Pulling…";
+      go.textContent = "Starting…";
       render(emptyPayload(symbol), "");
       try {
         const r = await fetch("/api/pull", {
@@ -327,14 +378,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ticker: symbol, symbol: symbol, name: name || "", confirmed: true })
         });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          render(emptyPayload(symbol), j.detail || "Pull failed.");
-          document.getElementById("status").className = "err";
-          return;
-        }
-        LIVE = j;
-        render(j, "");
+        await consumePull(r, symbol);
       } catch (e) {
         render(emptyPayload(symbol), "Could not reach the local server. Is it running?");
       } finally {
@@ -352,7 +396,7 @@
       const go = document.getElementById("go");
       go.disabled = true;
       const pb = document.getElementById("picks"); if (pb) pb.innerHTML = "";
-      document.getElementById("go").textContent = "Pulling…";
+      go.textContent = "Starting…";
       render(emptyPayload(typed), "");
       try {
         const r = await fetch("/api/pull", {
@@ -360,21 +404,7 @@
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ticker: typed })
         });
-        const j = await r.json().catch(() => ({}));
-        if (!r.ok) {
-          render(emptyPayload(typed), j.detail || "Pull failed.");
-          document.getElementById("status").className = "err";
-          return;
-        }
-        if (j.status === "pick") {
-          showPicks(j.matches || []);
-          render(emptyPayload(typed), j.detail || "Pick the listing.");
-          document.getElementById("status").className = "meta";
-          return;
-        }
-        LIVE = j;
-        document.getElementById("status").className = "meta";
-        render(j, "");
+        await consumePull(r, typed);
       } catch (e) {
         render(emptyPayload(typed), "Could not reach the local server. Is it running?");
         document.getElementById("status").className = "err";

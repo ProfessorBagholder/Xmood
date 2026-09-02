@@ -296,6 +296,7 @@ def classify_posts(
     symbol: str = "",
     name: str = "",
     chat: Callable[[list[dict[str, str]]], str] | None = None,
+    on_progress: Callable[[int, int], None] | None = None,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     pending: list[tuple[int, dict[str, Any]]] = []
@@ -313,14 +314,33 @@ def classify_posts(
     if not pending:
         return out
     chat_fn = chat or _chat_grok
-    for start in range(0, len(pending), 1):
-        batch = pending[start : start + 1]
+    chunk = 10
+    total = len(pending)
+    if on_progress:
+        on_progress(0, total)
+    def _one_or_skip(item):
+        try:
+            one = _score_chunk([{"i": 0, "text": scoring_text(item)}], symbol, name, chat_fn)
+            return one[0]
+        except ScoreError:
+            return {"label": "neutral", "why": SKIP_WHY}
+
+    for start in range(0, total, chunk):
+        batch = pending[start : start + chunk]
         payload = [{"i": j, "text": scoring_text(item)} for j, (_idx, item) in enumerate(batch)]
-        labels = _score_chunk(payload, symbol, name, chat_fn)
+        labels = None
+        try:
+            labels = _score_chunk(payload, symbol, name, chat_fn)
+        except ScoreError:
+            labels = None
+        if labels is None or (len(batch) > 1 and all(lab.get("why") == SKIP_WHY for lab in labels)):
+            labels = [_one_or_skip(item) for (_idx, item) in batch]
         for (_idx, item), lab in zip(batch, labels):
             item["classification"] = lab["label"]
             item["reason"] = lab["why"]
             out[_idx] = item
+        if on_progress:
+            on_progress(min(start + chunk, total), total)
     return out
 
 

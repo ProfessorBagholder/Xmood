@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import os
+import queue
 import re
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -13,7 +15,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -184,14 +186,16 @@ def _search_x(query: str, token: str) -> list[dict[str, Any]]:
     return out
 
 
-def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]]) -> dict[str, Any]:
+def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note=None) -> dict[str, Any]:
     posts: list[dict[str, Any]] = []
     dropped_wrong = 0
-    for tw in raw:
+    hits = [tw for tw in raw if _post_hits_symbol(tw.get("text") or "", symbol, name)]
+    dropped_wrong = len(raw) - len(hits)
+    n_hits = len(hits)
+    for i, tw in enumerate(hits, 1):
+        if note:
+            note(f"Reading {i}/{n_hits}")
         text = tw.get("text") or ""
-        if not _post_hits_symbol(text, symbol, name):
-            dropped_wrong += 1
-            continue
         lang = tw.get("lang")
         text_en, translated = _translate(text, lang)
         pid = str(tw.get("id") or "")
@@ -208,8 +212,12 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]]) -> d
                 "username": str(tw.get("username") or "").lstrip("@"),
             }
         )
+    def _score_progress(done: int, total: int) -> None:
+        if note:
+            note(f"Scoring {done}/{total}")
+
     try:
-        classified = classify_posts(posts, symbol=symbol, name=name)
+        classified = classify_posts(posts, symbol=symbol, name=name, on_progress=_score_progress)
     except ScoreError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
     kept = [p for p in classified if p.get("classification") != "spam"]
@@ -275,7 +283,7 @@ def api_lookup(q: str = "") -> JSONResponse:
 
 
 @app.post("/api/pull")
-def api_pull(body: PullIn) -> JSONResponse:
+def api_pull(body: PullIn):
     ticker = (body.ticker or "").strip().upper()
     if not TICKER_RE.match(ticker):
         raise HTTPException(status_code=400, detail="Ticker must be letters, digits, or dots.")
@@ -283,12 +291,12 @@ def api_pull(body: PullIn) -> JSONResponse:
     if not token:
         raise HTTPException(
             status_code=400,
-            detail="Add X_BEARER_TOKEN to the .env file next to this app. Do not paste the token into chat.",
+            detail="Add X_BEARER_TOKEN to the .env file next to this app.",
         )
     if not scoring_ready():
         raise HTTPException(
             status_code=400,
-            detail="Scoring uses the grok command on this computer. It was not found on PATH. Sign it in, or set GROK_BIN in .env to the grok file. Do not add an xAI console key.",
+            detail="Scoring uses the grok command on this computer. It was not found on PATH. Set GROK_BIN in .env if needed.",
         )
     matches = _yahoo_lookup(body.symbol or ticker)
     exact = [m for m in matches if m["symbol"].upper() == ticker.upper()]
@@ -320,8 +328,38 @@ def api_pull(body: PullIn) -> JSONResponse:
     symbol = chosen["symbol"]
     name = chosen.get("name") or ""
     query = _query(symbol, name)
-    raw = _search_x(query, token)
-    return JSONResponse(_payload(symbol, name, query, raw))
+    q = queue.Queue()
+
+    def note(msg: str) -> None:
+        q.put(("status", msg))
+
+    def work() -> None:
+        try:
+            note("Searching X")
+            raw = _search_x(query, token)
+            result = _payload(symbol, name, query, raw, note=note)
+            q.put(("done", result))
+        except HTTPException as e:
+            q.put(("error", e.detail))
+        except Exception as e:
+            q.put(("error", str(e)))
+
+    def events():
+        t = threading.Thread(target=work, daemon=True)
+        t.start()
+        while True:
+            kind, payload = q.get()
+            if kind == "status":
+                yield json.dumps({"t": "status", "text": payload}) + "\n"
+            elif kind == "error":
+                yield json.dumps({"t": "error", "detail": payload}) + "\n"
+                break
+            else:
+                yield json.dumps({"t": "done", "result": payload}) + "\n"
+                break
+        t.join(timeout=2)
+
+    return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
 @app.get("/api/status")
