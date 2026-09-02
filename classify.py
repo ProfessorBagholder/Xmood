@@ -320,19 +320,22 @@ def classify_posts(
     if on_progress:
         on_progress(0, total)
 
-    payload = [{"i": j, "text": scoring_text(item)} for j, (_idx, item) in enumerate(pending)]
-    try:
-        labels = _score_chunk(payload, symbol, name, chat_fn)
-    except ScoreError:
-        labels = _unlabeled(total)
-    if labels is None or len(labels) != total:
-        labels = _unlabeled(total)
-    for (_idx, item), lab in zip(pending, labels):
-        item["classification"] = lab["label"]
-        item["reason"] = lab["why"]
-        out[_idx] = item
-    if on_progress:
-        on_progress(total, total)
+    chunk = 10
+    for start in range(0, total, chunk):
+        batch = pending[start : start + chunk]
+        payload = [{"i": j, "text": scoring_text(item)} for j, (_idx, item) in enumerate(batch)]
+        try:
+            labels = _score_chunk(payload, symbol, name, chat_fn)
+        except ScoreError:
+            labels = _unlabeled(len(batch))
+        if not labels or len(labels) != len(batch):
+            labels = _unlabeled(len(batch))
+        for (_idx, item), lab in zip(batch, labels):
+            item["classification"] = lab["label"]
+            item["reason"] = lab["why"]
+            out[_idx] = item
+        if on_progress:
+            on_progress(min(start + chunk, total), total)
     return out
 
 
