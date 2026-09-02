@@ -216,9 +216,14 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
         )
     def _score_progress(done: int, total: int) -> None:
         if note:
-            note(f"Scoring {done}/{total}")
+            if done <= 0:
+                note("Scoring…")
+            else:
+                note(f"Scoring {done}/{total}")
 
     try:
+        if note:
+            note("Scoring…")
         classified = classify_posts(posts, symbol=symbol, name=name, on_progress=_score_progress)
     except ScoreError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
