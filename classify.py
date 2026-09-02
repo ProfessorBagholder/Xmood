@@ -33,6 +33,15 @@ GROK_LABEL_SCHEMA = {
     },
     "required": ["labels"],
 }
+GROK_THESIS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "summary": {"type": "string"},
+        "bull": {"type": "string"},
+        "bear": {"type": "string"},
+    },
+    "required": ["summary", "bull", "bear"],
+}
 
 SYSTEM = """You score social posts for a retail mood gauge on one stock.
 
@@ -50,6 +59,16 @@ spam: ads or a pile of unrelated tickers.
 If the post is a list of results, grade the results. Income up, a beat, a first shipment, or a unit delivered as the headline is bull. A miss, a cut, or a decline as the headline is bear. Naming which part of the business grew does not make it neutral.
 
 why: one short ordinary-English clause. No extra keys."""
+
+THESIS_SYSTEM = """You write a short two-sided case for one listed name.
+
+Return only JSON: {"summary":"...","bull":"...","bear":"..."}
+
+summary: one short ordinary-English mood line about this name.
+bull: the well thought-out case for the name doing well.
+bear: the well thought-out case for the name doing poorly.
+
+Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes. No trader slang. No print. No book. No extra keys."""
 
 
 class ScoreError(RuntimeError):
@@ -235,14 +254,14 @@ def scoring_ready() -> bool:
     return grok_bin() is not None
 
 
-def _grok_cmd(binary: Path | str, prompt: str) -> list[str]:
+def _grok_cmd(binary: Path | str, prompt: str, schema: dict[str, Any] | None = None) -> list[str]:
     return [
         str(binary),
         "-p",
         prompt,
         "--verbatim",
         "--json-schema",
-        json.dumps(GROK_LABEL_SCHEMA, separators=(",", ":")),
+        json.dumps(schema or GROK_LABEL_SCHEMA, separators=(",", ":")),
         "--output-format",
         "json",
         "--max-turns",
@@ -258,7 +277,7 @@ def _grok_cmd(binary: Path | str, prompt: str) -> list[str]:
     ]
 
 
-def _chat_grok(messages: list[dict[str, str]]) -> str:
+def _chat_grok(messages: list[dict[str, str]], schema: dict[str, Any] | None = None) -> str:
     binary = grok_bin()
     if binary is None:
         raise ScoreError(
@@ -270,7 +289,7 @@ def _chat_grok(messages: list[dict[str, str]]) -> str:
         parts.append(f"{m.get('role', 'user').upper()}:\n{m.get('content') or ''}")
     prompt = "\n\n".join(parts) + "\n\nReply with JSON only."
     r = subprocess.run(
-        _grok_cmd(binary, prompt),
+        _grok_cmd(binary, prompt, schema=schema),
         capture_output=True,
         text=True,
         timeout=180,
@@ -345,6 +364,82 @@ def classify_posts(
         if on_progress:
             on_progress(min(start + chunk, total), total)
     return out
+
+
+def _empty_thesis() -> dict[str, str]:
+    return {"summary": "", "bull": "", "bear": ""}
+
+
+def _has_thesis(obj: Any) -> bool:
+    return isinstance(obj, dict) and all(k in obj for k in ("summary", "bull", "bear"))
+
+
+def _unwrap_thesis(data: Any, depth: int = 0) -> Any:
+    if depth > 8 or data is None:
+        return None
+    if isinstance(data, str):
+        for blob in _json_blobs(data):
+            hit = _unwrap_thesis(blob, depth + 1)
+            if hit is not None:
+                return hit
+        return None
+    if _has_thesis(data):
+        return data
+    if isinstance(data, dict):
+        for key in ("result", "text", "content"):
+            if key not in data:
+                continue
+            hit = _unwrap_thesis(data[key], depth + 1)
+            if hit is not None:
+                return hit
+        for key, val in data.items():
+            if key in ("result", "text", "content"):
+                continue
+            if isinstance(val, (str, dict, list)):
+                hit = _unwrap_thesis(val, depth + 1)
+                if hit is not None:
+                    return hit
+        return None
+    if isinstance(data, list):
+        for item in data:
+            hit = _unwrap_thesis(item, depth + 1)
+            if hit is not None:
+                return hit
+        return None
+    return None
+
+
+def _parse_thesis(raw: str) -> dict[str, str]:
+    data = _unwrap_thesis(raw)
+    if not isinstance(data, dict):
+        return _empty_thesis()
+    return {
+        "summary": str(data.get("summary") or "").strip(),
+        "bull": str(data.get("bull") or "").strip(),
+        "bear": str(data.get("bear") or "").strip(),
+    }
+
+
+def write_thesis(
+    symbol: str,
+    name: str = "",
+    chat: Callable[[list[dict[str, str]]], str] | None = None,
+) -> dict[str, str]:
+    stock = f"{symbol} ({name})" if name else symbol
+    user = (
+        f"Listed name: {stock}\n"
+        "Write a short mood line plus a well thought-out two-sided case for this name.\n"
+        "Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes."
+    )
+    messages = [{"role": "system", "content": THESIS_SYSTEM}, {"role": "user", "content": user}]
+    try:
+        if chat is not None:
+            raw = chat(messages)
+        else:
+            raw = _chat_grok(messages, schema=GROK_THESIS_SCHEMA)
+    except Exception:
+        return _empty_thesis()
+    return _parse_thesis(raw)
 
 
 def _selftest() -> int:
@@ -434,6 +529,40 @@ def _selftest() -> int:
     s, lab = score_from_counts(8, 0)
     if s != 100 or lab != "Extreme bullish":
         print("FAIL score 100")
+        failed += 1
+
+    parsed_th = _parse_thesis('{"summary":"Mixed mood.","bull":"Sales can grow.","bear":"Costs may stay high."}')
+    if parsed_th != {"summary": "Mixed mood.", "bull": "Sales can grow.", "bear": "Costs may stay high."}:
+        print("FAIL thesis parse")
+        failed += 1
+    wrapped_th = _parse_thesis('noise before\n{"summary":"Quiet.","bull":"Demand.","bear":"Debt."}\nmore log')
+    if wrapped_th["summary"] != "Quiet." or wrapped_th["bull"] != "Demand." or wrapped_th["bear"] != "Debt.":
+        print("FAIL thesis unwrap")
+        failed += 1
+
+    def fake_thesis(messages: list[dict[str, str]]) -> str:
+        return json.dumps({"summary": "Steady.", "bull": "Customers stay.", "bear": "Rivals catch up."})
+
+    written = write_thesis("ZZZ", "Zed Co", chat=fake_thesis)
+    if written != {"summary": "Steady.", "bull": "Customers stay.", "bear": "Rivals catch up."}:
+        print("FAIL write_thesis")
+        failed += 1
+
+    def boom(_messages: list[dict[str, str]]) -> str:
+        raise ScoreError("grok failed")
+
+    if write_thesis("ZZZ", chat=boom) != _empty_thesis():
+        print("FAIL thesis empty on error")
+        failed += 1
+
+    tcmd = _grok_cmd("/tmp/grok", "prompt", schema=GROK_THESIS_SCHEMA)
+    if tcmd[tcmd.index("--reasoning-effort") + 1] != "low" or "none" in tcmd or "--always-approve" in tcmd:
+        print("FAIL thesis grok flags " + " ".join(tcmd))
+        failed += 1
+    tschema = json.loads(tcmd[tcmd.index("--json-schema") + 1])
+    props = tschema.get("properties") or {}
+    if not all(k in props for k in ("summary", "bull", "bear")):
+        print("FAIL thesis json-schema")
         failed += 1
     if failed:
         print(f"selftest FAIL ({failed})")
