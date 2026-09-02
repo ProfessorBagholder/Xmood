@@ -251,6 +251,10 @@ def _grok_cmd(binary: Path | str, prompt: str) -> list[str]:
         "--disable-web-search",
         "--reasoning-effort",
         "none",
+        "--cwd",
+        "/tmp",
+        "--rules",
+        "Reply with JSON only. Do not use tools. Do not edit files.",
     ]
 
 
@@ -327,9 +331,13 @@ def classify_posts(
         try:
             labels = _score_chunk(payload, symbol, name, chat_fn)
         except ScoreError:
+            if chat is None:
+                raise
             labels = _unlabeled(len(batch))
         if not labels or len(labels) != len(batch):
             labels = _unlabeled(len(batch))
+        if chat is None and labels and all(lab.get("why") == SKIP_WHY for lab in labels):
+            raise ScoreError("Grok did not return labels.")
         for (_idx, item), lab in zip(batch, labels):
             item["classification"] = lab["label"]
             item["reason"] = lab["why"]
@@ -414,7 +422,7 @@ def _selftest() -> int:
         failed += 1
 
     cmd = _grok_cmd("/tmp/grok", "prompt")
-    need = ["--verbatim", "--json-schema", "--output-format", "json", "--max-turns", "1", "--no-subagents", "--disable-web-search", "--reasoning-effort", "none"]
+    need = ["--verbatim", "--json-schema", "--output-format", "json", "--max-turns", "1", "--no-subagents", "--disable-web-search", "--reasoning-effort", "none", "--cwd", "--rules"]
     if any(flag not in cmd for flag in need) or "plain" in cmd:
         print("FAIL grok flags " + " ".join(cmd))
         failed += 1
