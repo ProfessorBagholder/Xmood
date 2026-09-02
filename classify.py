@@ -95,19 +95,17 @@ If facts are empty: say the case is limited because no company news was fetched.
 
 Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes. No trader slang. No print. No book. No extra keys."""
 
-THESIS_SYSTEM_SECTOR = """You write a short two-sided case for one industry, not for one listed company.
+THESIS_SYSTEM_SECTOR = """You write a short two-sided case for one industry.
 
 Return only JSON: {"summary":"...","bull":"...","bear":"..."}
 
-The title is an industry. It is not a ticker and not one company, even if a company uses the same words.
+summary: one short ordinary-English mood line that states the mood score.
+bull: the well thought-out case for the industry doing well. Use the given news and operating points.
+bear: the well thought-out case for the industry doing poorly. Use the given news and operating points.
 
-summary: one short ordinary-English mood line that states the mood score for the industry.
-bull: the case for the industry doing well. Speak about demand, costs, regulation, and several operators. Do not write a CEO change, a dividend, or one stock's slide as if they were the industry.
-bear: the case for the industry doing poorly, same rule.
+The title is an industry, not one listed company, even when a company shares the same name. Do not write that one company's CEO, dividend, or share move as if they were the industry.
 
-If a fact names one company, treat it as one name in the industry, not as the whole industry.
-
-If facts are empty: say the case is limited because no industry-wide points were fetched.
+If facts are empty: say the case is limited because no industry news was fetched.
 
 Ordinary English. Do not recap social posts. Do not invent filings, prices, or quotes. No trader slang. No print. No book. No extra keys."""
 
