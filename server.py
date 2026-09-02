@@ -240,14 +240,22 @@ def _x_stem(symbol: str) -> str:
 
 
 def _query(symbol: str, name: str) -> str:
-    # X posts use $QNC, not $QNC.V. Search the stem; keep the dotted tag as a second match.
+    # Keep the listing tag (QNC.V). Also search the undotted cashtag and the company name.
     tag = (symbol or "").strip().lstrip("$")
     stem = _x_stem(tag)
-    if not stem:
+    bits: list[str] = []
+    if "." in tag:
+        bits.append('"$' + tag + '"')
+        if stem:
+            bits.append("$" + stem)
+        nm = (name or "").strip()
+        if nm:
+            bits.append('"' + nm + '"')
+    elif stem:
+        bits.append("$" + stem)
+    if not bits:
         return "-is:retweet"
-    if "." in tag and tag.upper() != stem.upper():
-        return f'${stem} OR "${tag}" -is:retweet'
-    return f"${stem} -is:retweet"
+    return "(" + " OR ".join(bits) + ") -is:retweet"
 
 
 def _post_hits_symbol(text: str, symbol: str, name: str) -> bool:
