@@ -85,7 +85,6 @@
     .en { color: var(--muted); font-size: 13px; margin-top: 4px; }
     .empty { color: var(--muted); padding: 12px 0; }
     footer { color: var(--muted); font-size: 12px; margin-top: 28px; }
-    #hist { width: 100%; height: 120px; }
     .err { color: var(--bear); font-size: 13px; }
     #picks { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 18px; }
     .pick { background: #21262d; color: var(--fg); border: 1px solid var(--edge); border-radius: 8px; padding: 8px 12px; cursor: pointer; text-align: left; font-weight: 500; }
@@ -134,7 +133,6 @@
       </div>
       <div class="card">
         <div class="posts" id="posts"></div>
-        <svg id="hist" viewBox="0 0 400 120"></svg>
       </div>
     </div>
   </div>
@@ -323,34 +321,9 @@
           box.appendChild(el);
         });
       }
-      drawHistory((payload.history || []).filter(h =>
-        !t || String(h.ticker || "").toUpperCase() === t
-      ));
       if (notice) setStatus(notice, true);
       else if (!PULLING) setStatus("", false);
 
-    }
-
-    function drawHistory(hist) {
-      const svg = document.getElementById("hist");
-      svg.innerHTML = "";
-      const pts = (hist || []).filter(h => h.score !== null && h.score !== undefined);
-      if (pts.length < 2) {
-        return;
-      }
-      const w = 400, h = 120, pad = 16;
-      let d = "";
-      pts.forEach((p, i) => {
-        const x = pad + i * ((w - 2 * pad) / (pts.length - 1));
-        const y = h - pad - (Number(p.score) / 100) * (h - 2 * pad);
-        d += (i ? "L" : "M") + x + " " + y + " ";
-      });
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("d", d);
-      path.setAttribute("fill", "none");
-      path.setAttribute("stroke", "#58a6ff");
-      path.setAttribute("stroke-width", "2");
-      svg.appendChild(path);
     }
 
 
