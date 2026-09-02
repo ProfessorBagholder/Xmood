@@ -57,6 +57,15 @@
     .label.idle { font-size: 13px; color: var(--muted); font-weight: 400; margin: 8px 0 0; }
     .bars.idle { display: none; }
     .score.idle { display: none; }
+    .blurb.idle { display: none; }
+    .blurb { margin-top: 16px; font-size: 13px; line-height: 1.45; }
+    .blurb .mood { color: var(--muted); margin: 0 0 12px; }
+    .blurb .side { margin: 0 0 10px; }
+    .blurb .side:last-child { margin-bottom: 0; }
+    .blurb .side-label { font-weight: 700; font-size: 13px; letter-spacing: 0.02em; margin-bottom: 2px; }
+    .blurb .side-label.bull { color: var(--bull); }
+    .blurb .side-label.bear { color: var(--bear); }
+    .blurb .side p { margin: 0; color: var(--fg); }
     .counts { color: var(--muted); font-size: 13px; margin-top: 12px; }
     .bar-row { display: grid; grid-template-columns: 80px 1fr 90px; gap: 8px; align-items: center; margin: 8px 0; }
     .track { background: #21262d; height: 12px; border-radius: 6px; overflow: hidden; border: 1px solid var(--edge); }
@@ -110,6 +119,17 @@
         <div class="bar-row"><span>Bullish</span><div class="track"><div class="fill" id="bBull" style="width:0;background:var(--bull)"></div></div><span id="tBull">0 · 0%</span></div>
         <div class="bar-row"><span>No view</span><div class="track"><div class="fill" id="bNeut" style="width:0;background:var(--neut)"></div></div><span id="tNeut">0 · 0%</span></div>
         <div class="bar-row"><span>Bearish</span><div class="track"><div class="fill" id="bBear" style="width:0;background:var(--bear)"></div></div><span id="tBear">0 · 0%</span></div>
+        </div>
+        <div id="blurb" class="blurb idle">
+          <p class="mood" id="blurbSummary"></p>
+          <div class="side">
+            <div class="side-label bull">Bull</div>
+            <p id="blurbBull"></p>
+          </div>
+          <div class="side">
+            <div class="side-label bear">Bear</div>
+            <p id="blurbBear"></p>
+          </div>
         </div>
       </div>
       <div class="card">
@@ -258,6 +278,13 @@
       document.getElementById("tBull").textContent = bull + " · " + pct(bull, kept) + "%";
       document.getElementById("tNeut").textContent = neut + " · " + pct(neut, kept) + "%";
       document.getElementById("tBear").textContent = bear + " · " + pct(bear, kept) + "%";
+      const blurb = document.getElementById("blurb");
+      const thesis = payload.thesis || {};
+      const hasThesis = Boolean(thesis.summary || thesis.bull || thesis.bear);
+      document.getElementById("blurbSummary").textContent = hasThesis ? (thesis.summary || "") : "";
+      document.getElementById("blurbBull").textContent = hasThesis ? (thesis.bull || "") : "";
+      document.getElementById("blurbBear").textContent = hasThesis ? (thesis.bear || "") : "";
+      blurb.className = ready && hasThesis ? "blurb" : "blurb idle";
       const box = document.getElementById("posts");
       box.innerHTML = "";
       const posts = payload.posts || [];

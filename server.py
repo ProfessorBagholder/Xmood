@@ -22,7 +22,7 @@ from pydantic import BaseModel
 ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
-from classify import ScoreError, classify_posts, score_from_counts, scoring_ready, scorer_info  # noqa: E402
+from classify import ScoreError, classify_posts, score_from_counts, scoring_ready, scorer_info, write_thesis  # noqa: E402
 
 STATIC = ROOT / "static"
 RESULTS = ROOT / "results"
@@ -235,6 +235,12 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
     score, label = score_from_counts(bull, bear)
     if not classified:
         label = "No posts matched that exact tag"
+    if note:
+        note("Writing thesis…")
+    try:
+        thesis = write_thesis(symbol, name)
+    except Exception:
+        thesis = {"summary": "", "bull": "", "bear": ""}
     as_of = _now()
     result = {
         "ticker": symbol,
@@ -254,6 +260,11 @@ def _payload(symbol: str, name: str, query: str, raw: list[dict[str, Any]], note
         "neutral": neut,
         "score": score,
         "label": label,
+        "thesis": {
+            "summary": str((thesis or {}).get("summary") or ""),
+            "bull": str((thesis or {}).get("bull") or ""),
+            "bear": str((thesis or {}).get("bear") or ""),
+        },
         "status": "complete",
         "scorer": scorer_info().get("scorer"),
         "scorer_path": scorer_info().get("path"),
