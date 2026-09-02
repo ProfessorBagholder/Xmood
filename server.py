@@ -125,9 +125,14 @@ def _prefer_equity(rows: list[dict[str, str]]) -> list[dict[str, str]]:
     return equities or rows
 
 
+def _name_needs_fill(name: str) -> bool:
+    n = (name or "").strip()
+    return not n or " " not in n
+
+
 def _fill_empty_names(client, rows: list[dict[str, str]]) -> None:
     for row in rows:
-        if (row.get("name") or "").strip():
+        if not _name_needs_fill(row.get("name") or ""):
             continue
         sym = row["symbol"]
         for hit in _yahoo_quotes(client, sym):
