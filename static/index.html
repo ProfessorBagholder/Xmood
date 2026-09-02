@@ -31,6 +31,13 @@
       padding: 10px 16px; font-size: 15px; cursor: pointer; font-weight: 600;
     }
     button:hover { background: #2ea043; }
+    button:disabled, button:disabled:hover {
+      background: #238636;
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    #status { font-size: 13px; }
+    #status.busy { color: var(--muted); }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
     @media (max-width: 820px) { .grid { grid-template-columns: 1fr; } }
     .card { background: var(--panel); border: 1px solid var(--edge); border-radius: 12px; padding: 18px; }
@@ -70,9 +77,9 @@
   <div class="wrap">
     <h1>Xmood</h1>
     <div class="row">
-      <input type="text" name="ticker" id="ticker" placeholder="CH.V" maxlength="12" autocomplete="off" autofocus />
+      <input type="text" name="ticker" id="ticker" placeholder="Ticker" maxlength="12" autocomplete="off" autofocus />
       <button type="button" id="go">Pull</button>
-      <span id="status" class="err" hidden></span>
+      <span id="status" hidden></span>
     </div>
     <div id="picks"></div>
     <div class="grid">
@@ -99,8 +106,8 @@
   </div>
   <script>
     const LAST_PAYLOAD = {
-      "ticker": "GLW",
-      "as_of": "2026-09-01 18:00 America/Edmonton",
+      "ticker": "",
+      "as_of": "",
       "window": "last 7 days",
       "query": "$GLW -is:retweet",
       "credits_estimate_usd": 0.50,
@@ -174,7 +181,7 @@
     }
 
     function emptyPayload(ticker) {
-      const t = (ticker || "GLW").toUpperCase();
+      const t = (ticker || "").toUpperCase();
       return {
         ticker: t,
         as_of: "",
@@ -200,7 +207,10 @@
 
     function render(payload, notice) {
       const t = (payload.ticker || "").toUpperCase();
-      document.getElementById("sub").textContent = [payload.company, payload.display_ticker || payload.ticker].filter(Boolean).join(" · ");
+      const ready = Boolean(payload.as_of) || (payload.posts || []).length || Number(payload.n_fetched || 0);
+      document.getElementById("sub").textContent = ready
+        ? [payload.company, payload.display_ticker || payload.ticker].filter(Boolean).join(" · ")
+        : "";
       setNeedle(payload.score);
       const sn = document.getElementById("scoreNum");
       if (payload.score === null || payload.score === undefined) {
@@ -262,14 +272,8 @@
       drawHistory((payload.history || []).filter(h =>
         !t || String(h.ticker || "").toUpperCase() === t
       ));
-      const st = document.getElementById("status");
-      if (notice && (payload.score === null || payload.score === undefined) && !(payload.posts || []).length && notice !== "Pulling posts…") {
-        st.hidden = false;
-        st.textContent = notice;
-      } else {
-        st.hidden = true;
-        st.textContent = "";
-      }
+      if (notice) setStatus(notice, true);
+      else if (!PULLING) setStatus("", false);
 
     }
 
@@ -316,8 +320,30 @@
       });
     }
 
-        async function consumePull(r, fallbackTicker) {
+    let PULLING = false;
+
+    function setStatus(text, isErr) {
+      const st = document.getElementById("status");
+      if (!text) {
+        st.hidden = true;
+        st.textContent = "";
+        st.className = "";
+        return;
+      }
+      st.hidden = false;
+      st.className = isErr ? "err" : "busy";
+      st.textContent = text;
+    }
+
+    function setPulling(on) {
+      PULLING = on;
       const go = document.getElementById("go");
+      go.disabled = on;
+      go.textContent = "Pull";
+      go.setAttribute("aria-busy", on ? "true" : "false");
+    }
+
+    async function consumePull(r, fallbackTicker) {
       const ctype = (r.headers.get("content-type") || "").toLowerCase();
       if (ctype.includes("ndjson") || ctype.includes("jsonl")) {
         const reader = r.body.getReader();
@@ -334,10 +360,9 @@
             buf = buf.slice(nl + 1);
             if (!line) continue;
             const ev = JSON.parse(line);
-            if (ev.t === "status" && ev.text) go.textContent = ev.text;
+            if (ev.t === "status" && ev.text) setStatus(ev.text, false);
             if (ev.t === "error") {
-              render(emptyPayload(fallbackTicker), ev.detail || "Pull failed.");
-              document.getElementById("status").className = "err";
+              setStatus(ev.detail || "Pull failed.", true);
               return;
             }
             if (ev.t === "done") last = ev.result;
@@ -345,33 +370,30 @@
         }
         if (last) {
           LIVE = last;
-          document.getElementById("status").className = "meta";
+          setStatus("", false);
           render(last, "");
         }
         return;
       }
       const j = await r.json().catch(() => ({}));
       if (!r.ok) {
-        render(emptyPayload(fallbackTicker), j.detail || "Pull failed.");
-        document.getElementById("status").className = "err";
+        setStatus(j.detail || "Pull failed.", true);
         return;
       }
       if (j.status === "pick") {
         showPicks(j.matches || []);
-        render(emptyPayload(fallbackTicker), j.detail || "Pick the listing.");
-        document.getElementById("status").className = "meta";
+        setStatus(j.detail || "Pick the listing.", false);
         return;
       }
       LIVE = j;
-      document.getElementById("status").className = "meta";
+      setStatus("", false);
       render(j, "");
     }
 
-async function pullConfirmed(symbol, name) {
-      const go = document.getElementById("go");
-      go.disabled = true;
-      go.textContent = "Starting…";
-      render(emptyPayload(symbol), "");
+    async function pullConfirmed(symbol, name) {
+      if (PULLING) return;
+      setPulling(true);
+      setStatus("Starting…", false);
       try {
         const r = await fetch("/api/pull", {
           method: "POST",
@@ -380,24 +402,22 @@ async function pullConfirmed(symbol, name) {
         });
         await consumePull(r, symbol);
       } catch (e) {
-        render(emptyPayload(symbol), "Could not reach the local server. Is it running?");
+        setStatus("Could not reach the local server. Is it running?", true);
       } finally {
-        go.disabled = false;
-        go.textContent = "Pull";
+        setPulling(false);
       }
     }
 
     async function pull() {
+      if (PULLING) return;
       const typed = (document.getElementById("ticker").value || "").trim().toUpperCase();
       if (!typed) {
         document.getElementById("ticker").focus();
         return;
       }
-      const go = document.getElementById("go");
-      go.disabled = true;
       const pb = document.getElementById("picks"); if (pb) pb.innerHTML = "";
-      go.textContent = "Starting…";
-      render(emptyPayload(typed), "");
+      setPulling(true);
+      setStatus("Starting…", false);
       try {
         const r = await fetch("/api/pull", {
           method: "POST",
@@ -406,11 +426,9 @@ async function pullConfirmed(symbol, name) {
         });
         await consumePull(r, typed);
       } catch (e) {
-        render(emptyPayload(typed), "Could not reach the local server. Is it running?");
-        document.getElementById("status").className = "err";
+        setStatus("Could not reach the local server. Is it running?", true);
       } finally {
-        go.disabled = false;
-        go.textContent = "Pull";
+        setPulling(false);
       }
     }
 
@@ -427,8 +445,6 @@ async function pullConfirmed(symbol, name) {
       .then(j => {
         if (!j || j.status === "idle" || (!j.n_fetched && !(j.posts || []).length)) return;
         LIVE = j;
-        const t = document.getElementById("ticker");
-        if (!t.value && j.ticker) t.placeholder = j.ticker;
         render(j, "");
       })
       .catch(() => {});
