@@ -49,6 +49,20 @@ def parent_sector(industry: str, taxonomy: list[dict[str, object]] | None = None
     return ""
 
 
+def canonical_industry(industry: str, taxonomy: list[dict[str, object]] | None = None) -> str:
+    # Yahoo search uses an em dash; the picker list uses a hyphen.
+    want = _norm_name(industry)
+    if not want:
+        return ""
+    tax = taxonomy or load_taxonomy()
+    for row in tax:
+        for name in row.get("industries") or []:
+            n = str(name).strip()
+            if _norm_name(n) == want:
+                return n
+    return ""
+
+
 def x_stem(symbol: str) -> str:
     tag = (symbol or "").strip().lstrip("$")
     return tag.split(".", 1)[0] if tag else ""
@@ -127,6 +141,8 @@ def _selftest() -> int:
     names = {n for row in tax for n in row["industries"]}
     check("Software - Infrastructure" in names, "taxonomy missing Software - Infrastructure")
     check("Bogus Sector" not in names, "taxonomy grew a made-up industry")
+    check(canonical_industry("Software—Infrastructure", tax) == "Software - Infrastructure", "em dash must map to picker spelling")
+    check(canonical_industry("not a yahoo industry", tax) == "", "unknown industry must stay empty")
 
     if failed:
         print(f"selftest FAIL ({failed})")

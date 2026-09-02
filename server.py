@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
 from classify import SKIP_WHY, ScoreError, classify_posts, score_from_counts, scoring_ready, scorer_info, write_thesis  # noqa: E402
-from queries import load_taxonomy, parent_sector, sector_query, symbol_query  # noqa: E402
+from queries import canonical_industry, load_taxonomy, parent_sector, sector_query, symbol_query  # noqa: E402
 
 STATIC = ROOT / "static"
 RESULTS = ROOT / "results"
@@ -72,11 +72,17 @@ def _quote_row(row: dict) -> dict[str, str] | None:
         return None
     longname = str(row.get("longname") or row.get("longName") or "").strip()
     shortname = str(row.get("shortname") or row.get("shortName") or row.get("name") or "").strip()
+    industry = canonical_industry(str(row.get("industryDisp") or row.get("industry") or ""))
+    sector = str(row.get("sectorDisp") or row.get("sector") or "").strip()
+    if industry and not sector:
+        sector = parent_sector(industry)
     return {
         "symbol": sym,
         "name": longname or shortname,
         "exchange": str(row.get("exchDisp") or row.get("exchange") or "").strip(),
         "type": str(row.get("quoteType") or row.get("typeDisp") or "").strip(),
+        "industry": industry,
+        "sector": sector,
     }
 
 
@@ -156,6 +162,10 @@ def _fill_empty_names(client, rows: list[dict[str, str]]) -> None:
                 row["exchange"] = hit["exchange"]
             if hit.get("type") and not row.get("type"):
                 row["type"] = hit["type"]
+            if hit.get("industry") and not row.get("industry"):
+                row["industry"] = hit["industry"]
+            if hit.get("sector") and not row.get("sector"):
+                row["sector"] = hit["sector"]
             break
         if (row.get("name") or "").strip():
             continue
@@ -253,26 +263,16 @@ def _yahoo_profile(symbol: str) -> dict[str, str]:
     headers = {"User-Agent": "Mozilla/5.0"}
     try:
         with httpx.Client(timeout=20.0, headers=headers, follow_redirects=True) as client:
-            client.get("https://finance.yahoo.com")
-            crumb = (client.get("https://query1.finance.yahoo.com/v1/test/getcrumb").text or "").strip()
-            r = client.get(
-                f"https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}",
-                params={"modules": "assetProfile", "crumb": crumb},
-            )
+            rows = _yahoo_quotes(client, symbol)
     except Exception:
         return empty
-    if r.status_code >= 400:
+    hit = next((row for row in rows if (row.get("symbol") or "").upper() == symbol.upper()), None)
+    if not hit:
         return empty
-    results = ((r.json() or {}).get("quoteSummary") or {}).get("result") or []
-    if not results or not isinstance(results[0], dict):
+    industry = canonical_industry(hit.get("industry") or "")
+    sector = (hit.get("sector") or "").strip() or parent_sector(industry)
+    if not industry:
         return empty
-    prof = results[0].get("assetProfile") or results[0].get("summaryProfile") or {}
-    if not isinstance(prof, dict):
-        return empty
-    industry = str(prof.get("industryDisp") or prof.get("industry") or "").strip()
-    sector = str(prof.get("sectorDisp") or prof.get("sector") or "").strip()
-    if industry and not sector:
-        sector = parent_sector(industry)
     return {"industry": industry, "sector": sector}
 
 
@@ -688,8 +688,18 @@ def api_pull(body: PullIn):
     def work(note, q) -> None:
         note("Searching X…")
         profile = {"industry": "", "sector": ""}
+        hit = next((m for m in matches if m["symbol"].upper() == symbol.upper()), None)
+        if hit:
+            if hit.get("industry"):
+                profile["industry"] = canonical_industry(hit.get("industry") or "")
+            if hit.get("sector"):
+                profile["sector"] = hit.get("sector") or ""
+            if profile["industry"] and not profile["sector"]:
+                profile["sector"] = parent_sector(profile["industry"])
 
         def fetch_profile() -> None:
+            if profile.get("industry"):
+                return
             try:
                 profile.update(_yahoo_profile(symbol))
             except Exception:
