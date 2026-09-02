@@ -60,6 +60,9 @@ def _token() -> str:
     return (os.environ.get("X_BEARER_TOKEN") or "").strip()
 
 
+_CA_LISTING_SUFFIXES = (".CN", ".V", ".TO", ".NE")
+
+
 def _yahoo_lookup(q: str) -> list[dict[str, str]]:
     import httpx
 
@@ -83,14 +86,26 @@ def _yahoo_lookup(q: str) -> list[dict[str, str]]:
         if not sym or sym.upper() in seen:
             continue
         seen.add(sym.upper())
+        longname = str(row.get("longname") or "").strip()
+        shortname = str(row.get("shortname") or "").strip()
         out.append(
             {
                 "symbol": sym,
-                "name": str(row.get("shortname") or row.get("longname") or "").strip(),
+                "name": longname or shortname,
                 "exchange": str(row.get("exchDisp") or row.get("exchange") or "").strip(),
                 "type": str(row.get("quoteType") or "").strip(),
             }
         )
+    if "." not in q:
+        root = q.upper()
+
+        def _ca_first(row: dict[str, str]) -> int:
+            sym = row["symbol"].upper()
+            if any(sym == root + suf for suf in _CA_LISTING_SUFFIXES):
+                return 0
+            return 1
+
+        out.sort(key=_ca_first)
     return out
 
 
