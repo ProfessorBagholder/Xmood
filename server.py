@@ -94,7 +94,7 @@ def _yahoo_quotes(client, q: str) -> list[dict[str, str]]:
 def _yahoo_lookup_docs(client, q: str) -> list[dict[str, str]]:
     r = client.get(
         "https://query1.finance.yahoo.com/v1/finance/lookup",
-        params={"query": q, "type": "equity", "count": 40},
+        params={"query": q, "type": "equity", "count": 100},
     )
     if r.status_code >= 400:
         return []
@@ -120,9 +120,17 @@ def _keeps_typed(sym: str, typed: str) -> bool:
     return root == typed_u
 
 
+_NON_EQUITY_MARKERS = ("ETF", "FUTURE", "INDEX", "MUTUALFUND", "OPTION", "CRYPTOCURRENCY")
+
+
 def _prefer_equity(rows: list[dict[str, str]]) -> list[dict[str, str]]:
-    equities = [row for row in rows if (row.get("type") or "").upper() == "EQUITY"]
-    return equities or rows
+    kept: list[dict[str, str]] = []
+    for row in rows:
+        t = (row.get("type") or "").strip().upper()
+        if any(marker in t for marker in _NON_EQUITY_MARKERS):
+            continue
+        kept.append(row)
+    return kept
 
 
 def _name_needs_fill(name: str) -> bool:
@@ -174,9 +182,16 @@ def _yahoo_lookup(q: str) -> list[dict[str, str]]:
     out: list[dict[str, str]] = []
     seen: set[str] = set()
     with httpx.Client(timeout=20.0, headers=headers) as client:
-        rows = list(_yahoo_quotes(client, q))
+        lookup_qs = [q]
         if "." not in q:
-            rows.extend(_yahoo_lookup_docs(client, q + "."))
+            lookup_qs.append(q + ".")
+            lookup_qs.extend(q + "." + ch for ch in "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+        rows = list(_yahoo_quotes(client, q))
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            for extra in pool.map(lambda qq: _yahoo_lookup_docs(client, qq), lookup_qs):
+                rows.extend(extra)
         for row in rows:
             key = row["symbol"].upper()
             if key in seen:
@@ -479,7 +494,7 @@ def api_pull(body: PullIn):
             status_code=400,
             detail="Scoring uses the grok command on this computer. It was not found on PATH. Set GROK_BIN in .env if needed.",
         )
-    matches = _yahoo_lookup(body.symbol or ticker)
+    matches = _yahoo_lookup(ticker)
     exact = [m for m in matches if m["symbol"].upper() == ticker.upper()]
     chosen = None
     if body.confirmed and (body.symbol or ticker):
@@ -491,7 +506,7 @@ def api_pull(body: PullIn):
             hit = [m for m in matches if m["symbol"].upper() == chosen["symbol"].upper()]
             if hit:
                 chosen["name"] = hit[0]["name"]
-    elif exact and ("." in ticker or len(matches) == 1):
+    elif "." in ticker and exact:
         chosen = exact[0]
     elif len(matches) == 1:
         chosen = matches[0]
