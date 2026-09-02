@@ -25,13 +25,14 @@
     #status {
       display: block;
       font-size: 13px;
+      line-height: 1.45em;
+      height: 1.45em;
+      overflow: hidden;
       color: var(--muted);
-      min-height: 1.45em;
       margin: 0 0 18px;
       text-align: left;
     }
     #status.err { color: var(--bear); }
-    #status[hidden] { display: none; }
     input[name="ticker"] {
       background: #21262d; color: var(--fg); border: 1px solid var(--edge);
       border-radius: 8px; padding: 10px 12px; font-size: 16px; width: 140px; letter-spacing: 0.04em;
@@ -91,7 +92,7 @@
       <input type="text" name="ticker" id="ticker" placeholder="Symbol" maxlength="12" autocomplete="off" autofocus />
       <button type="button" id="go">Pull</button>
     </div>
-    <div id="status" hidden></div>
+    <div id="status"></div>
     <div id="picks"></div>
     <div class="grid">
       <div class="card">
@@ -350,15 +351,8 @@
 
     function setStatus(text, isErr) {
       const st = document.getElementById("status");
-      if (!text) {
-        st.hidden = true;
-        st.textContent = "";
-        st.className = "";
-        return;
-      }
-      st.hidden = false;
-      st.className = isErr ? "err" : "busy";
-      st.textContent = text;
+      st.className = isErr ? "err" : "";
+      st.textContent = text || "";
     }
 
     function setPulling(on) {

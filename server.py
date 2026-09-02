@@ -95,11 +95,13 @@ def _yahoo_lookup(q: str) -> list[dict[str, str]]:
 
 
 def _query(symbol: str, name: str) -> str:
-    # Phrase-match the cashtag so $CH.V is not treated as $CH.
-    bits = [f'"${symbol}"']
-    if name:
-        bits.append(f'"{name}"')
-    return "(" + " OR ".join(bits) + ") -is:retweet"
+    # $CAT is the X cashtag. A dotted tag like $CH.V has to be quoted so it is not $CH.
+    tag = symbol.strip()
+    if re.fullmatch(r"[A-Za-z0-9]+", tag):
+        cashtag = "$" + tag
+    else:
+        cashtag = '"$' + tag + '"'
+    return cashtag + " -is:retweet"
 
 
 def _post_hits_symbol(text: str, symbol: str, name: str) -> bool:
