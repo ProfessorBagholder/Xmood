@@ -117,26 +117,40 @@ def sector_query(industry: str, sector: str = "") -> str:
     return f'"{industry}" -is:retweet'
 
 
+_LEGAL_SUFFIX = re.compile(
+    r"[,]?\s+(?:Inc\.?|Corporation|Corp\.?|Limited|Ltd\.?|LLC|LP|Co\.?)\s*$",
+    re.I,
+)
+
+
+def company_core(name: str) -> str:
+    """Strip trailing Inc/Corp/Corporation/Ltd/Limited/LLC/LP/Co."""
+    text = (name or "").strip()
+    while True:
+        nxt = _LEGAL_SUFFIX.sub("", text).strip().rstrip(",").strip()
+        if nxt == text:
+            return text
+        text = nxt
+
+
 def reddit_symbol_query(symbol: str, name: str = "") -> str:
-    """Reddit-friendly ticker query. Cashtags and -is:retweet are X-only."""
+    """Reddit-friendly ticker query. No bare short stems (SCD, QNC, CAT)."""
     tag = (symbol or "").strip().lstrip("$")
     stem = x_stem(tag)
+    core = company_core(name)
     bits: list[str] = []
     if "." in tag:
         bits.append(tag)
-        bits.append("$" + tag)
-        if stem and stem != tag:
-            bits.append(stem)
+        if stem:
             bits.append("$" + stem)
-        nm = (name or "").strip()
-        if nm:
-            bits.append(nm)
+        if core:
+            bits.append('"' + core + '"')
     elif stem:
-        bits.append(stem)
         bits.append("$" + stem)
-        nm = (name or "").strip()
-        if nm:
-            bits.append(nm)
+        if len(stem) >= 4:
+            bits.append(stem)
+        if core:
+            bits.append('"' + core + '"')
     return " OR ".join(bits)
 
 
@@ -201,13 +215,26 @@ def _selftest() -> int:
     check(qtm == '"quantum" -is:retweet', "sector_query(quantum) want=\"quantum\" -is:retweet got=" + qtm)
     check("Technology" not in qtm and "Industrials" not in qtm, "theme query must not add a parent sector got=" + qtm)
 
+    check(company_core("Scandium Canada Ltd.") == "Scandium Canada", "company_core Ltd")
+    check(company_core("Caterpillar Inc.") == "Caterpillar", "company_core Inc")
+    check(company_core("Quantum eMotion Corp.") == "Quantum eMotion", "company_core Corp")
+    check(company_core("Palantir") == "Palantir", "company_core already-core name")
+    check(company_core("Ford Motor Co.") == "Ford Motor", "company_core Co")
+    check(company_core("") == "", "company_core empty")
+
     r_pltr = reddit_symbol_query("PLTR", "Palantir")
-    check(r_pltr == "PLTR OR $PLTR OR Palantir", "PLTR reddit query want=PLTR OR $PLTR OR Palantir got=" + r_pltr)
+    check(r_pltr == '$PLTR OR PLTR OR "Palantir"', 'PLTR reddit query want=$PLTR OR PLTR OR "Palantir" got=' + r_pltr)
     check("-is:retweet" not in r_pltr, "reddit query must not use X retweet filter")
     r_cat = reddit_symbol_query("CAT", "Caterpillar Inc.")
-    check(r_cat == "CAT OR $CAT OR Caterpillar Inc.", "CAT reddit query got=" + r_cat)
+    check(r_cat == '$CAT OR "Caterpillar"', 'CAT reddit query want=$CAT OR "Caterpillar" got=' + r_cat)
+    check(" CAT " not in (" " + r_cat.replace("$CAT", "") + " "), "CAT must not use a bare short stem")
     r_qnc = reddit_symbol_query("QNC.V", "Quantum eMotion Corp.")
-    check("QNC.V" in r_qnc and "$QNC" in r_qnc and "Quantum eMotion Corp." in r_qnc, "QNC.V reddit query got=" + r_qnc)
+    check(r_qnc == 'QNC.V OR $QNC OR "Quantum eMotion"', 'QNC.V reddit query want=QNC.V OR $QNC OR "Quantum eMotion" got=' + r_qnc)
+    check(" QNC " not in (" " + r_qnc.replace("$QNC", "") + " "), "QNC.V must not use a bare short stem")
+    r_scd = reddit_symbol_query("SCD.V", "Scandium Canada Ltd.")
+    check(r_scd == 'SCD.V OR $SCD OR "Scandium Canada"', 'SCD.V reddit query want=SCD.V OR $SCD OR "Scandium Canada" got=' + r_scd)
+    check(" SCD " not in (" " + r_scd.replace("$SCD", "") + " "), "SCD.V must not use a bare short stem")
+    check("$SCD.V" not in r_scd, "SCD.V must not search $SCD.V")
     r_sec = reddit_sector_query("Waste Management", "Industrials")
     check(r_sec == '"Waste Management"', "reddit sector query want=\"Waste Management\" got=" + r_sec)
     check("Industrials" not in r_sec, "reddit sector query must not include parent sector")

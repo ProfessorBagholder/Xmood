@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
 from classify import SKIP_WHY, ScoreError, classify_posts, score_from_counts, scoring_ready, scorer_info, write_thesis  # noqa: E402
-from queries import canonical_industry, load_taxonomy, parent_sector, reddit_sector_query, reddit_symbol_query, resolve_sector_subject, sector_query, symbol_query  # noqa: E402
+from queries import canonical_industry, company_core, load_taxonomy, parent_sector, reddit_sector_query, reddit_symbol_query, resolve_sector_subject, sector_query, symbol_query  # noqa: E402
 from reddit import RedditSearchError, search_reddit  # noqa: E402
 
 STATIC = ROOT / "static"
@@ -285,6 +285,12 @@ def _query(symbol: str, name: str) -> str:
     return symbol_query(symbol, name)
 
 
+def _word_hit(blob: str, token: str) -> bool:
+    if not token:
+        return False
+    return bool(re.search(r"(?<![A-Za-z0-9])" + re.escape(token) + r"(?![A-Za-z0-9])", blob, re.I))
+
+
 def _post_hits_symbol(text: str, symbol: str, name: str) -> bool:
     blob = text or ""
     tag = (symbol or "").strip().lstrip("$")
@@ -294,9 +300,45 @@ def _post_hits_symbol(text: str, symbol: str, name: str) -> bool:
             continue
         if re.search(r"\$" + re.escape(piece) + r"(?![A-Za-z0-9])", blob, re.I):
             return True
+    if "." in tag and _word_hit(blob, tag):
+        return True
+    if stem and len(stem) >= 4 and _word_hit(blob, stem):
+        return True
     if name and name.lower() in blob.lower():
         return True
+    core = company_core(name)
+    if core and core.lower() in blob.lower():
+        return True
     return False
+
+
+def _is_reddit(post: dict[str, Any]) -> bool:
+    return str(post.get("source") or "").strip().lower() == "reddit"
+
+
+def _take_mixed_posts(kept: list[dict[str, Any]], limit: int) -> list[dict[str, Any]]:
+    """Interleave X then Reddit so Reddit is not buried under an X-first slice."""
+    xs = [p for p in kept if not _is_reddit(p)]
+    reddits = [p for p in kept if _is_reddit(p)]
+    out: list[dict[str, Any]] = []
+    i = j = 0
+    while len(out) < limit and (i < len(xs) or j < len(reddits)):
+        if i < len(xs):
+            out.append(xs[i])
+            i += 1
+        if len(out) >= limit:
+            break
+        if j < len(reddits):
+            out.append(reddits[j])
+            j += 1
+    return out
+
+
+def _sources_note(n_x_kept: int, n_reddit_kept: int, n_reddit_fetched: int) -> str:
+    note = f"{n_x_kept} from X · {n_reddit_kept} from Reddit"
+    if n_reddit_fetched > 0 and n_reddit_kept == 0:
+        note += f" ({n_reddit_fetched} Reddit posts fetched, none matched this ticker)"
+    return note
 
 
 
@@ -609,6 +651,9 @@ def _payload(
         display = symbol
         hist_key = symbol
         ticker_out = symbol
+    n_x_kept = sum(1 for p in kept if not _is_reddit(p))
+    n_reddit_kept = sum(1 for p in kept if _is_reddit(p))
+    n_reddit_fetched = sum(1 for p in raw if _is_reddit(p))
     result = {
         "mode": "sector" if kind == "sector" else "symbol",
         "ticker": ticker_out,
@@ -628,6 +673,10 @@ def _payload(
         "n_fetched": len(raw),
         "n_dropped_wrong_symbol": dropped_wrong,
         "n_kept": len(kept),
+        "n_x_kept": n_x_kept,
+        "n_reddit_kept": n_reddit_kept,
+        "n_reddit_fetched": n_reddit_fetched,
+        "sources_note": _sources_note(n_x_kept, n_reddit_kept, n_reddit_fetched),
         "n_spam": spam_n,
         "bull": bull,
         "bear": bear,
@@ -643,7 +692,7 @@ def _payload(
         "scorer": scorer_info().get("scorer"),
         "scorer_path": scorer_info().get("path"),
         "scorer_detail": scorer_info().get("detail"),
-        "posts": kept[:12] if kept else classified[:12],
+        "posts": _take_mixed_posts(kept if kept else classified, 12),
         "history": [],
     }
     _append_history(

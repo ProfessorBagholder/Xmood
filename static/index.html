@@ -252,6 +252,7 @@
         </div>
       </div>
       <div class="card">
+        <div class="meta" id="sourcesLine"></div>
         <div class="posts" id="posts"></div>
       </div>
     </div>
@@ -459,6 +460,14 @@
       document.getElementById("blurbBull").textContent = hasThesis ? (thesis.bull || "") : "";
       document.getElementById("blurbBear").textContent = hasThesis ? (thesis.bear || "") : "";
       blurb.className = ready && hasThesis ? "blurb" : "blurb idle";
+      const sourcesLine = document.getElementById("sourcesLine");
+      if (sourcesLine) {
+        if (!ready) {
+          sourcesLine.textContent = "";
+        } else {
+          sourcesLine.textContent = [payload.sources_note, payload.credits_note].filter(Boolean).join(" · ");
+        }
+      }
       const box = document.getElementById("posts");
       box.innerHTML = "";
       const posts = payload.posts || [];
