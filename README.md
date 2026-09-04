@@ -1,12 +1,16 @@
 # Xmood
 
-Xmood is a local web app that pulls recent X posts for a ticker or a Yahoo industry and scores each post with the `grok` command on the same machine.
+Xmood is a local web app that pulls recent X posts — and optionally Reddit posts via [SocialCrawl](https://www.socialcrawl.dev) — for a ticker or a Yahoo industry, then scores each post with the `grok` command on the same machine.
 
 ## Requirements
 
 - Python 3.11+
-- An [X API](https://console.x.com) bearer token with recent search access
+- An [X API](https://console.x.com) bearer token with recent search access, and/or a SocialCrawl API key for Reddit
 - The [Grok CLI](https://grok.com) installed and signed in (`grok` on `PATH`, or set `GROK_BIN`)
+
+Reddit search is optional. Set `SOCIALCRAWL_API_KEY` to include one page of `GET /v1/reddit/search` (1 credit per search page). Scoring still uses local `grok` on the post text. This app does not call SocialCrawl `/v1/content_analysis/sentiment`.
+
+If `X_BEARER_TOKEN` is set, Pull works with X only. If `SOCIALCRAWL_API_KEY` is also set, Pull merges Reddit into the same Grok pass. If only the Reddit key and grok are available, Pull is Reddit-only. If neither source key is set, Pull returns a clear error.
 
 ## Setup
 
@@ -19,7 +23,7 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-Edit `.env` and set `X_BEARER_TOKEN`. Do not commit `.env`.
+Edit `.env` and set `X_BEARER_TOKEN` and, if you want Reddit, `SOCIALCRAWL_API_KEY`. Do not commit `.env`.
 
 If the Grok binary is not named `grok` or is not on `PATH`, set `GROK_BIN` to its full path.
 

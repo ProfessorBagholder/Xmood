@@ -23,7 +23,8 @@ ROOT = Path(__file__).resolve().parent
 load_dotenv(ROOT / ".env")
 sys.path.insert(0, str(ROOT))
 from classify import SKIP_WHY, ScoreError, classify_posts, score_from_counts, scoring_ready, scorer_info, write_thesis  # noqa: E402
-from queries import canonical_industry, load_taxonomy, parent_sector, resolve_sector_subject, sector_query, symbol_query  # noqa: E402
+from queries import canonical_industry, load_taxonomy, parent_sector, reddit_sector_query, reddit_symbol_query, resolve_sector_subject, sector_query, symbol_query  # noqa: E402
+from reddit import RedditSearchError, search_reddit  # noqa: E402
 
 STATIC = ROOT / "static"
 RESULTS = ROOT / "results"
@@ -62,6 +63,10 @@ def _when(iso: str) -> str:
 
 def _token() -> str:
     return (os.environ.get("X_BEARER_TOKEN") or "").strip()
+
+
+def _socialcrawl_key() -> str:
+    return (os.environ.get("SOCIALCRAWL_API_KEY") or "").strip()
 
 
 def _quote_row(row: dict) -> dict[str, str] | None:
@@ -363,10 +368,88 @@ def _search_x(query: str, token: str) -> list[dict[str, Any]]:
     for tw in body.get("data") or []:
         if not isinstance(tw, dict):
             continue
+        pid = str(tw.get("id") or "")
         row = dict(tw)
+        row["id"] = pid
         row["username"] = users.get(str(tw.get("author_id") or ""), "")
+        row["url"] = f"https://x.com/i/web/status/{pid}" if pid else ""
+        row["source"] = "x"
         out.append(row)
     return out
+
+
+def _credits_note(reddit: dict[str, int | None] | None) -> str:
+    note = "100 posts is $0.50"
+    reddit = reddit or {}
+    used = reddit.get("used")
+    remaining = reddit.get("remaining")
+    if used is None and remaining is None:
+        return note
+    bits = [note]
+    if used is not None and remaining is not None:
+        bits.append(f"Reddit used {used} credit" + ("s" if used != 1 else "") + f", {remaining} remaining.")
+    elif used is not None:
+        bits.append(f"Reddit used {used} credit" + ("s" if used != 1 else "") + ".")
+    else:
+        bits.append(f"Reddit credits remaining: {remaining}.")
+    return " ".join(bits)
+
+
+def _gather_posts(
+    x_query: str,
+    reddit_query: str,
+    token: str,
+    reddit_key: str,
+    note=None,
+) -> tuple[list[dict[str, Any]], int, dict[str, int | None]]:
+    x_posts: list[dict[str, Any]] = []
+    reddit_posts: list[dict[str, Any]] = []
+    reddit_creds: dict[str, int | None] = {"used": None, "remaining": None}
+    x_err: Exception | None = None
+    reddit_err: Exception | None = None
+
+    def do_x() -> None:
+        nonlocal x_posts, x_err
+        if not token:
+            return
+        try:
+            if note:
+                note("Searching X…")
+            x_posts = _search_x(x_query, token)
+        except Exception as e:
+            x_err = e
+
+    def do_reddit() -> None:
+        nonlocal reddit_posts, reddit_creds, reddit_err
+        if not reddit_key:
+            return
+        try:
+            if note:
+                note("Searching Reddit…")
+            reddit_posts, reddit_creds = search_reddit(reddit_query, reddit_key)
+        except Exception as e:
+            reddit_err = e
+
+    threads: list[threading.Thread] = []
+    if token:
+        t = threading.Thread(target=do_x, daemon=True)
+        t.start()
+        threads.append(t)
+    if reddit_key:
+        t = threading.Thread(target=do_reddit, daemon=True)
+        t.start()
+        threads.append(t)
+    for t in threads:
+        t.join()
+    if x_err:
+        raise x_err
+    if reddit_err and token and note:
+        note("Reddit search failed; scoring X only.")
+    if reddit_err and not token:
+        if isinstance(reddit_err, RedditSearchError):
+            raise HTTPException(status_code=reddit_err.status_code, detail=reddit_err.detail) from reddit_err
+        raise reddit_err
+    return x_posts + reddit_posts, len(x_posts), reddit_creds
 
 
 def _payload(
@@ -380,6 +463,9 @@ def _payload(
     industry: str = "",
     sector: str = "",
     theme: bool = False,
+    n_x: int | None = None,
+    reddit_creds: dict[str, int | None] | None = None,
+    reddit_query: str = "",
 ) -> dict[str, Any]:
     posts: list[dict[str, Any]] = []
     dropped_wrong = 0
@@ -393,26 +479,40 @@ def _payload(
         dropped_wrong = len(raw) - len(hits)
         score_symbol = symbol
         score_name = name
-    for i, tw in enumerate(hits, 1):
-        if note and i == 1:
-            note("Searching X…")
+    x_count = len(raw) if n_x is None else n_x
+    for tw in hits:
         text = tw.get("text") or ""
         lang = tw.get("lang")
         text_en, translated = _translate(text, lang)
         pid = str(tw.get("id") or "")
-        posts.append(
-            {
-                "id": pid,
-                "url": f"https://x.com/i/web/status/{pid}" if pid else "",
-                "created_at": _when(str(tw.get("created_at") or "")),
-                "text": text,
-                "text_original": text,
-                "text_en": text_en,
-                "lang": lang or "",
-                "translated": translated,
-                "username": str(tw.get("username") or "").lstrip("@"),
-            }
-        )
+        source = str(tw.get("source") or "x").strip().lower() or "x"
+        url = str(tw.get("url") or "").strip()
+        if not url and source == "x" and pid:
+            url = f"https://x.com/i/web/status/{pid}"
+        created = str(tw.get("created_at") or "")
+        if "T" in created or created.endswith("Z"):
+            created = _when(created)
+        row = {
+            "id": pid,
+            "url": url,
+            "created_at": created,
+            "text": text,
+            "text_original": text,
+            "text_en": text_en,
+            "lang": lang or "",
+            "translated": translated,
+            "username": str(tw.get("username") or "").lstrip("@"),
+            "source": source,
+        }
+        sub = str(tw.get("subreddit") or "").strip()
+        if sub:
+            row["subreddit"] = sub
+        if "likes" in tw:
+            row["likes"] = tw.get("likes")
+        if "comments" in tw:
+            row["comments"] = tw.get("comments")
+        posts.append(row)
+
     def _score_progress(done: int, total: int) -> None:
         if note:
             if done <= 0:
@@ -520,8 +620,11 @@ def _payload(
         "as_of": as_of,
         "window": "last 7 days",
         "query": query,
-        "credits_estimate_usd": round(0.005 * len(raw), 3),
-        "credits_note": "100 posts is $0.50",
+        "reddit_query": reddit_query,
+        "credits_estimate_usd": round(0.005 * x_count, 3),
+        "credits_note": _credits_note(reddit_creds),
+        "reddit_credits_used": (reddit_creds or {}).get("used"),
+        "reddit_credits_remaining": (reddit_creds or {}).get("remaining"),
         "n_fetched": len(raw),
         "n_dropped_wrong_symbol": dropped_wrong,
         "n_kept": len(kept),
@@ -608,16 +711,17 @@ def _stream_pull(work_fn):
     return StreamingResponse(events(), media_type="application/x-ndjson")
 
 
-def _ready_to_search() -> tuple[str, None] | tuple[None, str]:
+def _ready_to_search() -> tuple[str, str, None] | tuple[None, None, str]:
     token = _token()
-    if not token:
-        return None, "Add X_BEARER_TOKEN to the .env file next to this app."
+    reddit_key = _socialcrawl_key()
+    if not token and not reddit_key:
+        return None, None, "Add X_BEARER_TOKEN or SOCIALCRAWL_API_KEY to the .env file next to this app."
     if not scoring_ready():
-        return None, (
+        return None, None, (
             "Scoring uses the grok command on this computer. It was not found on PATH. "
             "Set GROK_BIN in .env if needed."
         )
-    return token, None
+    return token, reddit_key, None
 
 
 @app.post("/api/pull")
@@ -627,14 +731,14 @@ def api_pull(body: PullIn):
         industry, sector, is_theme = resolve_sector_subject(body.industry or "")
         if not industry:
             raise HTTPException(status_code=400, detail="Type a theme or pick an industry.")
-        token, err = _ready_to_search()
+        token, reddit_key, err = _ready_to_search()
         if err:
             raise HTTPException(status_code=400, detail=err)
         query = sector_query(industry, sector)
+        r_query = reddit_sector_query(industry, sector)
 
         def work(note, q) -> None:
-            note("Searching X…")
-            raw = _search_x(query, token)
+            raw, n_x, reddit_creds = _gather_posts(query, r_query, token or "", reddit_key or "", note)
             result = _payload(
                 "",
                 "",
@@ -645,6 +749,9 @@ def api_pull(body: PullIn):
                 industry=industry,
                 sector=sector,
                 theme=is_theme,
+                n_x=n_x,
+                reddit_creds=reddit_creds,
+                reddit_query=r_query,
             )
             q.put(("done", result))
 
@@ -670,7 +777,7 @@ def api_pull(body: PullIn):
                 "matches": matches,
             }
         )
-    token, err = _ready_to_search()
+    token, reddit_key, err = _ready_to_search()
     if err:
         raise HTTPException(status_code=400, detail=err)
     matches = _yahoo_lookup(ticker)
@@ -686,9 +793,9 @@ def api_pull(body: PullIn):
     symbol = chosen["symbol"]
     name = chosen.get("name") or ""
     query = _query(symbol, name)
+    r_query = reddit_symbol_query(symbol, name)
 
     def work(note, q) -> None:
-        note("Searching X…")
         profile = {"industry": "", "sector": ""}
         hit = next((m for m in matches if m["symbol"].upper() == symbol.upper()), None)
         if hit:
@@ -709,7 +816,7 @@ def api_pull(body: PullIn):
 
         t_prof = threading.Thread(target=fetch_profile, daemon=True)
         t_prof.start()
-        raw = _search_x(query, token)
+        raw, n_x, reddit_creds = _gather_posts(query, r_query, token or "", reddit_key or "", note)
         t_prof.join(timeout=12)
         result = _payload(
             symbol,
@@ -720,6 +827,9 @@ def api_pull(body: PullIn):
             kind="stock",
             industry=profile.get("industry") or "",
             sector=profile.get("sector") or "",
+            n_x=n_x,
+            reddit_creds=reddit_creds,
+            reddit_query=r_query,
         )
         q.put(("done", result))
 

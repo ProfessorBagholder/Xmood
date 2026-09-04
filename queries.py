@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""X search query builders. No network. Used by the local app and by --selftest."""
+"""X and Reddit search query builders. No network. Used by the local app and by --selftest."""
 from __future__ import annotations
 
 import json
@@ -117,6 +117,37 @@ def sector_query(industry: str, sector: str = "") -> str:
     return f'"{industry}" -is:retweet'
 
 
+def reddit_symbol_query(symbol: str, name: str = "") -> str:
+    """Reddit-friendly ticker query. Cashtags and -is:retweet are X-only."""
+    tag = (symbol or "").strip().lstrip("$")
+    stem = x_stem(tag)
+    bits: list[str] = []
+    if "." in tag:
+        bits.append(tag)
+        bits.append("$" + tag)
+        if stem and stem != tag:
+            bits.append(stem)
+            bits.append("$" + stem)
+        nm = (name or "").strip()
+        if nm:
+            bits.append(nm)
+    elif stem:
+        bits.append(stem)
+        bits.append("$" + stem)
+        nm = (name or "").strip()
+        if nm:
+            bits.append(nm)
+    return " OR ".join(bits)
+
+
+def reddit_sector_query(industry: str, sector: str = "") -> str:
+    """Quoted industry phrase. Parent sector stays out of the search."""
+    industry = (industry or "").strip()
+    if not industry:
+        return ""
+    return f'"{industry}"'
+
+
 def _selftest() -> int:
     failed = 0
 
@@ -169,6 +200,19 @@ def _selftest() -> int:
     check('"quantum"' in qtm, "sector_query(quantum) must contain quoted quantum got=" + qtm)
     check(qtm == '"quantum" -is:retweet', "sector_query(quantum) want=\"quantum\" -is:retweet got=" + qtm)
     check("Technology" not in qtm and "Industrials" not in qtm, "theme query must not add a parent sector got=" + qtm)
+
+    r_pltr = reddit_symbol_query("PLTR", "Palantir")
+    check(r_pltr == "PLTR OR $PLTR OR Palantir", "PLTR reddit query want=PLTR OR $PLTR OR Palantir got=" + r_pltr)
+    check("-is:retweet" not in r_pltr, "reddit query must not use X retweet filter")
+    r_cat = reddit_symbol_query("CAT", "Caterpillar Inc.")
+    check(r_cat == "CAT OR $CAT OR Caterpillar Inc.", "CAT reddit query got=" + r_cat)
+    r_qnc = reddit_symbol_query("QNC.V", "Quantum eMotion Corp.")
+    check("QNC.V" in r_qnc and "$QNC" in r_qnc and "Quantum eMotion Corp." in r_qnc, "QNC.V reddit query got=" + r_qnc)
+    r_sec = reddit_sector_query("Waste Management", "Industrials")
+    check(r_sec == '"Waste Management"', "reddit sector query want=\"Waste Management\" got=" + r_sec)
+    check("Industrials" not in r_sec, "reddit sector query must not include parent sector")
+    r_theme = reddit_sector_query("quantum")
+    check(r_theme == '"quantum"', "reddit theme query want=\"quantum\" got=" + r_theme)
 
     theme_name, theme_parent, is_theme = resolve_sector_subject("quantum", tax)
     check(is_theme is True, "quantum must resolve as a theme")

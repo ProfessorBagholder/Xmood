@@ -1,0 +1,62 @@
+{
+  "success": true,
+  "data": {
+    "items": [
+      {
+        "post": {
+          "id": "1abc234",
+          "url": "https://www.reddit.com/r/stocks/comments/1abc234/pltr_thoughts/",
+          "content": {
+            "text": "$PLTR looks strong into earnings"
+          },
+          "author": {
+            "username": "retail_dan"
+          },
+          "engagement": {
+            "likes": 42,
+            "comments": 11
+          },
+          "published_at": "2026-09-01T15:04:00Z",
+          "ext": {
+            "subreddit": "stocks",
+            "title": "$PLTR thoughts",
+            "selftext": "$PLTR looks strong into earnings"
+          }
+        },
+        "computed": {
+          "score": 0.0
+        }
+      },
+      {
+        "post": {
+          "id": "2def456",
+          "url": "https://www.reddit.com/r/wallstreetbets/comments/2def456/palantir/",
+          "content": {
+            "text": "I'm long Palantir"
+          },
+          "author": {
+            "username": "wsb_owl"
+          },
+          "engagement": {
+            "likes": 100,
+            "comments": 8
+          },
+          "published_at": "2026-09-02T18:30:00+00:00",
+          "ext": {
+            "subreddit": "r/wallstreetbets",
+            "title": "Palantir",
+            "selftext": "I'm long Palantir"
+          }
+        },
+        "computed": {}
+      }
+    ]
+  },
+  "credits_used": 1,
+  "credits_remaining": 99,
+  "pagination": {
+    "next_cursor": null,
+    "has_more": false,
+    "page_size": 25
+  }
+}

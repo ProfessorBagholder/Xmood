@@ -185,6 +185,8 @@
     .badge.neutral { color: var(--neut); }
     .who { color: var(--muted); font-size: 12px; }
     .orig { margin-top: 4px; }
+    a.orig { color: inherit; text-decoration: none; }
+    a.orig:hover { color: var(--blue); }
     .en { color: var(--muted); font-size: 13px; margin-top: 4px; }
     .empty { color: var(--muted); padding: 12px 0; }
     footer { color: var(--muted); font-size: 12px; margin-top: 28px; }
@@ -473,10 +475,22 @@
           const bits = [];
           if (p.username) bits.push("@" + String(p.username).replace(/^@/, ""));
           if (p.created_at) bits.push(p.created_at);
+          const source = String(p.source || "x").toLowerCase();
+          if (source === "reddit") {
+            const sub = String(p.subreddit || "").replace(/^r\//i, "");
+            bits.push(sub ? "Reddit r/" + sub : "Reddit");
+          } else {
+            bits.push("X");
+          }
           who.textContent = bits.length ? "  " + bits.join(" · ") : "";
-          const txt = document.createElement("div");
+          const txt = p.url ? document.createElement("a") : document.createElement("div");
           txt.className = "orig";
           txt.textContent = originalText(p);
+          if (p.url) {
+            txt.href = p.url;
+            txt.target = "_blank";
+            txt.rel = "noopener noreferrer";
+          }
           el.appendChild(badge);
           el.appendChild(who);
           el.appendChild(txt);
@@ -718,7 +732,7 @@
     async function pullConfirmed(symbol, name) {
       if (PULLING) return;
       setPulling(true);
-      setStatus("Searching X…", false);
+      setStatus("Searching…", false);
       try {
         const r = await fetch("/api/pull", {
           method: "POST",
@@ -754,7 +768,7 @@
       const pb = document.getElementById("picks");
       if (pb) pb.innerHTML = "";
       setPulling(true);
-      setStatus("Searching X…", false);
+      setStatus("Searching…", false);
       try {
         const r = await fetch("/api/pull", {
           method: "POST",
