@@ -184,7 +184,7 @@
     .badge.bear { color: var(--bear); }
     .badge.neutral { color: var(--neut); }
     .who { color: var(--muted); font-size: 12px; }
-    .orig { margin-top: 4px; }
+    .orig { margin-top: 4px; white-space: pre-wrap; }
     a.orig { color: inherit; text-decoration: none; }
     a.orig:hover { color: var(--blue); }
     .en { color: var(--muted); font-size: 13px; margin-top: 4px; }
@@ -472,16 +472,15 @@
           badge.textContent = c === "bull" ? "Bullish" : c === "bear" ? "Bearish" : c === "spam" ? "Spam" : "No view";
           const who = document.createElement("span");
           who.className = "who";
-          const bits = [];
-          if (p.username) bits.push("@" + String(p.username).replace(/^@/, ""));
-          if (p.created_at) bits.push(p.created_at);
           const source = String(p.source || "x").toLowerCase();
+          let sourceLabel = "X";
           if (source === "reddit") {
             const sub = String(p.subreddit || "").replace(/^r\//i, "");
-            bits.push(sub ? "Reddit r/" + sub : "Reddit");
-          } else {
-            bits.push("X");
+            sourceLabel = sub ? "Reddit r/" + sub : "Reddit";
           }
+          const bits = [sourceLabel];
+          if (p.username) bits.push("@" + String(p.username).replace(/^@/, ""));
+          if (p.created_at) bits.push(p.created_at);
           who.textContent = bits.length ? "  " + bits.join(" · ") : "";
           const txt = p.url ? document.createElement("a") : document.createElement("div");
           txt.className = "orig";
